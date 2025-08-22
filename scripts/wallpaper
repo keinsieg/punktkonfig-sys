@@ -1,0 +1,567 @@
+#!/usr/bin/env python3
+# Dependencies: feh, rox (pinboard), spacefm, zzzfm, desktop-session-wallpaper, Gtk, pyGtk,
+# xset-root, desktop_tool, python os mod, python re mod, python sys mod
+# File Name: wallpaper
+# Version: 3.1
+# Purpose: allows the user to select a meathod for setting the wallpaper,
+#          as well as a wallpaper / color / default folder based on their
+#          choice of options. Requires window manager session codename to
+#          be recorded in $DESKTOP_CODE.
+# Authors: Dave (david@daveserver.info)
+
+# Copyright (C) antiXCommunity http://antixforums.com
+# License: gplv2
+# This file is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+################################################################################
+#################################################################
+
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import Gtk, Gdk, GObject, GLib, Gio, GdkPixbuf
+import os, re, sys
+import gettext
+gettext.install("wallpaper", "/usr/share/locale")
+#Change below to use a different window title
+TITLE=_("antiX Wallpaper")
+#Change below to set icon for when an icon is missing / cannot be found for the entry
+MISSING_ICON = "image-missing"
+#Get the default gtk icon theme
+ICON_THEME = Gtk.IconTheme.get_default()
+
+class Error:
+    def __init__(self, error):
+        dlg = Gtk.MessageDialog(parent=None, flags=0, message_type=Gtk.MessageType.ERROR, buttons=Gtk.ButtonsType.OK, text="Error")
+        dlg.set_title(_("Error"))
+        dlg.format_secondary_text(error)
+        dlg.set_keep_above(True) # note: set_transient_for() is ineffective!
+        dlg.run()
+        dlg.destroy()
+       
+class Success:
+    def __init__(self, success):
+        dlg = Gtk.MessageDialog(parent=None, flags=0, message_type=Gtk.MessageType.INFO, buttons=Gtk.ButtonsType.OK, text="Success")
+        dlg.set_title(_("Successfully updated"))
+        dlg.format_secondary_text(success)
+        dlg.set_keep_above(True) # note: set_transient_for() is ineffective!
+        dlg.run()
+        dlg.destroy()
+
+class Var:
+    def get_saved_wallpaper(self):
+        found=False
+        wallpaper_file=self.default_image
+        for line in open(self.conf_user_file_wallpapers, "r"):
+            if "#" not in line:
+                if re.search(r'^%s=' % (self.desktop_code), line):
+                    pieces = line.split('=')
+                    wallpaper_file = re.sub(r'\n', '', pieces[1])
+                    found = True
+
+        if not found:
+            self.write("WALLPAPER", self.default_image)
+            wallpaper_file = self.default_image
+        
+        return wallpaper_file
+
+    def write(self, variable_name, variable_item):
+        if variable_name == "COLOR": 
+            variable_item = '{:02X}{:02X}{:02X}'.format(int(variable_item.red * 255), int(variable_item.green * 255), int(variable_item.blue * 255))
+        if variable_name == "WALLPAPER":
+            save_file = self.conf_user_file_wallpapers
+            variable_name = self.desktop_code
+        else:
+            save_file = self.conf_user_file
+
+        found=False
+        open((save_file+".tmp"), "w").close()
+        text = open((save_file+".tmp"), "a")
+        for line in open(save_file, "r"):
+            if "#" not in line:
+                if re.search(r'^%s=' % (variable_name), line):
+                    found=True
+                    text.write (variable_name+"="+variable_item+"\n")
+                else:
+                    text.write (line)
+            else:
+                text.write (line)
+        if not found:
+            text.write (variable_name+"="+variable_item+"\n")
+        text.close()
+        os.system("mv %s %s" % ((save_file+".tmp"), (save_file)))
+
+    def __init__(self):
+        user_home = os.environ['HOME']
+        display = re.sub(r':', '', os.environ['DISPLAY'])
+        display_split = display.split('.')
+        display = display_split[0]
+        conf_user_dir = user_home+"/.desktop-session/"
+        self.conf_user_file = conf_user_dir+"wallpaper.conf"
+        self.conf_user_file_wallpapers = conf_user_dir+"wallpaper-list.conf"
+        conf_system_file = "/usr/share/desktop-session/desktop-session-wallpaper/wallpaper.conf"
+        conf_system_file_wallpapers = "/usr/share/desktop-session/desktop-session-wallpaper/wallpaper-list.conf"
+        self.default_image = "/usr/share/desktop-session/desktop-session-wallpaper/default-image"
+        self.help_file = "/usr/share/desktop-session/desktop-session-wallpaper/help.txt"
+        self.default_colour = "ffffff"
+        self.style_dictionary = {0:"scale", 1:"center", 2:"fill"}
+        self.action_dictionary = {0:"static", 1:"random", 2:"random-time",3:"color"}
+        
+        with open(conf_user_dir+"desktop-code."+display, "r") as f:
+            self.desktop_code = re.sub(r'\n', '', f.readline())
+
+        #if re.search(r'space|zzz', self.desktop_code):
+        #    self.no_colour = True
+        #else:
+        #    self.no_colour = False
+        self.no_colour=False
+            
+        if not os.path.exists(conf_user_dir):
+            os.system("mkdir %s" % (conf_user_dir))
+            os.system("cp %s %s" % ((conf_system_file),(conf_user_dir)))
+            os.system("cp %s %s" % ((conf_system_file_wallpapers),(conf_user_dir)))
+        else:
+            if not os.path.isfile(self.conf_user_file):
+                os.system("cp %s %s" % ((conf_system_file),(conf_user_dir)))
+            if not os.path.isfile(self.conf_user_file_wallpapers):
+                os.system("cp %s %s" % ((conf_system_file_wallpapers),(conf_user_dir)))
+
+        for line in open(self.conf_user_file, "r"):
+            if "#" not in line:
+                if re.search(r'^.*=', line):
+                    pieces = line.split('=')
+                    variable_name = re.sub(r'\n', '', pieces[0])
+                    variable_item = re.sub(r'\n', '', pieces[1])
+                    if variable_name == "DEFAULT" and os.path.isfile(variable_item):
+                        self.default_image = variable_item
+                    elif variable_name == "HELP" and os.path.isfile(variable_item):
+                        self.help_file = variable_item
+                    elif variable_name == "COLOR":
+                        self.current_colour = Gdk.RGBA()
+                        self.current_colour.parse("#%s" % variable_item)
+                    elif self.no_colour == True and variable_name == "TYPE":
+                        self.TYPE = "static"
+                    else:
+                        setattr(self, variable_name, variable_item)
+
+        self.image = self.get_saved_wallpaper()
+
+class Help:
+    def __init__(self, widget):
+        text = open((Var.help_file), "r")
+        HELPTEXT = text.read()
+        text.close
+        help = Gtk.Dialog()
+        help.set_size_request(350, 350)
+        help.set_resizable(True)
+        help.set_title(TITLE)
+        help.set_icon(win.pixbuf)
+
+        helptext = Gtk.TextBuffer()
+        helptext.set_text(HELPTEXT)
+
+        view = Gtk.TextView();
+        view.set_buffer(helptext)
+        view.set_editable(False)
+        setting = view.get_buffer()
+        view.set_wrap_mode(2)
+        view.show()
+
+        textsw = Gtk.ScrolledWindow()
+        textsw.add(view)
+        textsw.show()
+
+        help.vbox.pack_start(textsw, True, True, 0)
+        help.add_button(Gtk.STOCK_CLOSE, 1)
+
+        help.run()
+        help.destroy()
+
+class About:
+    def __init__(self, widget):
+        about = Gtk.AboutDialog()
+        about.set_program_name(TITLE)
+        about.set_icon(win.pixbuf)
+        iconinfo = Build_Picture.get_icon("/usr/share/desktop-session/desktop-session-wallpaper/logo", 250, 1)
+        about.set_logo(iconinfo[0])
+        about.set_version("3.0")
+        about.set_copyright("(c) the antiX community")
+        about.set_comments(_("This is an antiX application for setting the wallpaper on the preinstalled window managers"))
+        about.set_website("http://antixforums.com")
+        about.run()
+        about.destroy()
+        
+class Folder_Select:
+    def __init__(self,widget):
+        dialog = Gtk.FileChooserDialog(title=_('Select Folder...'), parent=None, action=Gtk.FileChooserAction.SELECT_FOLDER)
+        dialog.add_buttons(
+            Gtk.STOCK_CANCEL,
+            Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OPEN,
+            Gtk.ResponseType.OK,
+        )
+        
+        dialog.set_icon(win.pixbuf)
+        dialog.set_current_folder(os.path.expanduser(Var.FOLDER))
+
+        filter = Gtk.FileFilter()
+        filter.set_name(_("All Files"))
+        filter.add_pattern("*")
+        dialog.add_filter(filter)
+
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            Var.FOLDER = dialog.get_filename()
+            Var.write('FOLDER', Var.FOLDER)
+            dialog.destroy()
+        elif response == Gtk.ResponseType.CANCEL:
+            dialog.destroy()
+            
+class Picture_Select:
+    def update_preview(self, dialog, preview):
+        filename = dialog.get_preview_filename()
+        try:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(filename, 200,200)
+            preview.set_from_pixbuf(pixbuf)
+            have_preview = True
+        except:
+            have_preview = False
+        dialog.set_preview_widget_active(have_preview)
+        return
+
+    def __init__(self,widget):
+        dialog = Gtk.FileChooserDialog(title=_('Select Image...'), parent=None, action=Gtk.FileChooserAction.OPEN)
+        dialog.add_buttons(
+            Gtk.STOCK_CANCEL,
+            Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OPEN,
+            Gtk.ResponseType.OK,
+        )
+        
+        dialog.set_icon(win.pixbuf)
+        dialog.set_current_folder(os.path.expanduser(Var.FOLDER))
+
+        filter = Gtk.FileFilter()
+        filter.set_name(_("Images"))
+        filter.add_mime_type("image/png")
+        filter.add_mime_type("image/jpeg")
+        filter.add_mime_type("image/gif")
+        filter.add_mime_type("image/tiff")
+        filter.add_pattern("*.png")
+        filter.add_pattern("*.jpg")
+        filter.add_pattern("*.gif")
+        filter.add_pattern("*.jpeg")
+        filter.add_pattern("*.tiff")
+        filter.add_pattern("*.tif")
+        dialog.add_filter(filter)
+
+        previewImage = Gtk.Image()
+        dialog.set_preview_widget(previewImage)
+        dialog.set_use_preview_label(False)
+        dialog.connect("update-preview", self.update_preview, previewImage)
+        
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            Var.image = dialog.get_filename()
+            win.imagebox.remove(win.image)
+            Build_Picture.build_image(Var.image)
+            dialog.destroy()
+        elif response == Gtk.ResponseType.CANCEL:
+            dialog.destroy()
+
+class Colour_Select:
+    def __init__(self, widget):
+        dialog= Gtk.ColorChooserDialog(title=_('Select background colour'), parent=None)
+        dialog.set_icon(win.pixbuf)
+        dialog.set_rgba(Var.current_colour)
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            Var.current_colour = dialog.get_rgba()
+            Build_Picture.build_colour(Var.current_colour)
+            dialog.destroy()
+        elif response == Gtk.ResponseType.CANCEL:
+            dialog.destroy()
+
+class Build_Picture:
+    def get_icon(appicon, icon_size, icon_type):
+        if os.path.isfile(appicon):
+            icon = appicon
+        else:
+            if ICON_THEME.lookup_icon(appicon, icon_size, 0):
+                icon_info = ICON_THEME.lookup_icon(appicon, icon_size, 0)
+                icon = icon_info.get_filename()
+            else:
+                if os.path.exists("/usr/share/pixmaps/%s" % appicon):
+                    icon = "/usr/share/pixmaps/"+appicon
+                else:
+                    icon = MISSING_ICON
+        icon = re.sub(r' ','\ ', icon)
+        try:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(icon, icon_size, icon_size)
+        except:
+            if icon_type == 0:
+                icon_info = ICON_THEME.lookup_icon(MISSING_ICON, icon_size, 0)
+                icon = icon_info.get_filename()
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file(icon)
+            elif icon_type == 1:
+                try:
+                    pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(self.default_image, icon_size, icon_size)
+                except:
+                    shmoo = Gtk.Image()
+                    pixbuf = shmoo.set_from_file('whatever_empty')
+
+        return pixbuf,icon
+           
+    def build_colour(colour):
+        try: win.imagebox.remove(win.image)
+        except: pass
+        win.image = Gtk.VBox()
+        win.image.override_background_color(Gtk.StateType.NORMAL, Var.current_colour)
+        win.image.set_size_request(300,300)
+        win.imagebox.pack_start(win.image, 1,1,1)
+        win.image.show()
+
+    def build_image(imagename):
+        iconinfo = Build_Picture.get_icon(imagename, 300, 1)
+        try: win.imagebox.remove(win.image)
+        except: pass
+        win.image = Gtk.Image.new_from_pixbuf(iconinfo[0])
+        win.imagebox.pack_start(win.image, 1,0,0)
+        win.image.show()
+
+class mainWindow(Gtk.Window):
+    def set(self, widget):
+        style_model = self.style_type.get_model()
+        style_index = self.style_type.get_active()
+        action_model = self.action_type.get_model()
+        action_index = self.action_type.get_active()
+        #self.action_dictionary = {0:"static", 1:"random", 2:"random-time",3:"color"}
+        if ( action_model[action_index][0] == 0):
+            Var.write('TYPE', 'static')
+            Var.write('STYLE', Var.style_dictionary[style_model[style_index][0]])
+            Var.write('WALLPAPER', Var.image)
+            os.system("desktop-session-wallpaper &")
+        if ( action_model[action_index][0] == 1):
+            Var.write('TYPE', 'random')
+            Var.write('STYLE', Var.style_dictionary[style_model[style_index][0]])
+            os.system("desktop-session-wallpaper & sleep 1;")
+            self.imagebox.remove(self.image)
+            saved_wallpaper = Var.get_saved_wallpaper()
+            Build_Picture.build_image(saved_wallpaper[0])
+        if ( action_model[action_index][0] == 2):
+            cycle_time_value = int(self.cycle_time.get_value())
+            Var.write('TYPE', 'random-time')
+            Var.write('STYLE', Var.style_dictionary[style_model[style_index][0]])
+            Var.write('DELAY', str(cycle_time_value*60))
+            os.system("desktop-session-wallpaper & sleep 1;")
+            self.imagebox.remove(self.image)
+            saved_wallpaper = Var.get_saved_wallpaper()
+            Build_Picture.build_image(saved_wallpaper[0])
+        if ( action_model[action_index][0] == 3):
+            Var.write('TYPE', 'color')
+            Var.write('COLOR', Var.current_colour)
+            os.system("desktop-session-wallpaper &")
+
+    def combochange (self, widget):
+        #self.action_dictionary = {0:"static", 1:"random", 2:"random-time",3:"color"}
+        action_model = self.action_type.get_model()
+        action_index = self.action_type.get_active()
+        self.colour_button.hide()
+        self.folder_button.hide()
+        self.picture_button.hide()
+        self.timebox.hide()
+        self.menu_image.hide()
+        self.menu_colour.hide()
+
+        if ( action_model[action_index][0] == 0):
+            Var.TYPE=(Var.action_dictionary[action_model[action_index][0]])
+            self.picture_button.show()
+            self.menu_image.show()
+            Build_Picture.build_image(Var.image)
+
+        if ( action_model[action_index][0] == 1):
+            Var.TYPE=(Var.action_dictionary[action_model[action_index][0]])
+            self.folder_button.show()
+            Build_Picture.build_image(Var.image)
+
+        if ( action_model[action_index][0] == 2):
+            Var.TYPE=(Var.action_dictionary[action_model[action_index][0]])
+            self.folder_button.show()
+            self.timebox.show_all()
+            Build_Picture.build_image(Var.image)
+
+        if ( action_model[action_index][0] == 3):
+            Var.TYPE=(Var.action_dictionary[action_model[action_index][0]])
+            self.colour_button.show()
+            self.menu_colour.show()
+            Build_Picture.build_colour(Var.current_colour)
+
+        if Var.no_colour != True and Var.TYPE != "color":
+            self.style_type.show()
+        else:
+            self.style_type.hide()
+
+    def build_button(self, button_type, image, size, label):
+        iconinfo = Build_Picture.get_icon(image, size, 0)
+        button_image = Gtk.Image.new_from_pixbuf(iconinfo[0])
+
+        button_label = Gtk.Label()
+        button_label.set_text(label)
+
+        buttoncontainer = Gtk.HBox()
+        buttoncontainer.pack_start(button_image, 0,0,0)
+        buttoncontainer.pack_start(button_label, 1,0,0)
+        buttoncontainer.show_all()
+
+        if button_type == 0:
+            button = Gtk.Button()
+            button.set_size_request(100,50)
+            button.add(buttoncontainer)
+            return button
+
+        if button_type == 1:
+            menu_button = Gtk.MenuItem.new()
+            menu_button.add(buttoncontainer)
+            return menu_button
+            
+    def __init__(self):
+        Gtk.Window.__init__(self)
+        self.set_size_request(400,400)
+        self.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
+        self.set_border_width(10)
+        self.set_title(TITLE)
+        iconinfo = Build_Picture.get_icon("preferences-desktop-wallpaper", 16, 0)
+        self.pixbuf = iconinfo[0]
+        self.set_icon(self.pixbuf)
+        self.show()
+        
+        self.grid = Gtk.Grid()
+        self.grid.set_column_spacing(10)
+        self.grid.set_row_spacing(10)
+        self.add(self.grid)
+        self.grid.show()
+
+        menu_help = self.build_button(1, "system-help", 16, _("Help"))
+        menu_help.connect("activate", Help)
+
+        menu_about = self.build_button(1, "help-about", 16, _("About"))
+        menu_about.connect("activate", About)
+
+        menu_folder = self.build_button(1, "folder-open", 16, _("Default Folder"))
+        menu_folder.connect("activate", Folder_Select)
+        
+        self.menu_image = self.build_button(1, "insert-image", 16, _("Set Image"))
+        self.menu_image.connect("activate", Picture_Select)
+ 
+        self.menu_colour = self.build_button(1, "gcolor", 16, _("Select Colour"))
+        self.menu_colour.connect("activate", Colour_Select)
+
+        menu_exit = self.build_button(1, "window-close", 16, _("Close"))
+        menu_exit.connect("activate", lambda w: Gtk.main_quit())
+
+        options_menu = Gtk.Menu()
+        options_menu.append(menu_help)
+        options_menu.append(menu_about)
+        options_menu.append(menu_folder)
+        options_menu.append(self.menu_image)
+        options_menu.append(self.menu_colour)
+        options_menu.append(menu_exit)
+        
+        filemenu = Gtk.MenuItem()
+        filemenu.set_label(_("Options"))
+        filemenu.set_submenu(options_menu)
+
+        menubar = Gtk.MenuBar()
+        menubar.append(filemenu)
+        self.grid.attach(menubar, 1,1,2,1)
+        menubar.show_all()
+        
+        self.imagebox = Gtk.HBox()
+        self.imagebox.set_hexpand(True)
+        self.imagebox.set_vexpand(True)
+        self.imagebox.set_margin_top(10)
+        self.imagebox.show_all()
+        self.grid.attach(self.imagebox, 1,2,2,1)
+        
+        renderer_text = Gtk.CellRendererText()
+        
+        action_types = { 0:_("Static"), 1:_("Random Wallpaper"), 2:_("Random Wallpaper Timed")}
+        if Var.no_colour != True:
+            action_types[3]=_("No Wallpaper")
+        action_type_store = Gtk.ListStore(int,str)
+        for key in action_types:
+            action_type_store.append([key, action_types[key]]) 
+        self.action_type = Gtk.ComboBox.new_with_model(action_type_store)
+        self.action_type.set_active(list(Var.action_dictionary.keys())[list(Var.action_dictionary.values()).index(Var.TYPE)])
+        self.action_type.pack_start(renderer_text, True)
+        self.action_type.add_attribute(renderer_text, "text", 1)
+        self.action_type.connect("changed", self.combochange)
+        self.grid.attach(self.action_type, 1,3,2,1)
+        self.action_type.show()
+        
+        style_types = { 0:_("Scale"), 1:_("Centre"), 2:_("Fill") }
+        style_types_store = Gtk.ListStore(int, str)
+        for key in style_types:
+            style_types_store.append([key, style_types[key]])
+        self.style_type = Gtk.ComboBox.new_with_model(style_types_store)
+        self.style_type.set_active(list(Var.style_dictionary.keys())[list(Var.style_dictionary.values()).index(Var.STYLE)])
+        self.style_type.pack_start(renderer_text, True)
+        self.style_type.add_attribute(renderer_text, "text", 1)
+        self.grid.attach(self.style_type, 1,4,2,1)
+        
+        timebox_label = Gtk.Label()
+        timebox_label.set_text(_("  Time between wallpaper cycle (Minutes)  "))
+        
+        adj1 = Gtk.Adjustment(value=float(int(Var.DELAY)/60), lower=1, upper=60, step_increment=1, page_increment=5, page_size=1)
+        self.cycle_time = Gtk.HScale()
+        self.cycle_time.set_adjustment(adj1)
+        self.cycle_time.set_digits(0)
+        self.cycle_time.set_draw_value(True)
+        
+        self.timebox = Gtk.VBox()
+        self.timebox.set_border_width(10)
+        self.timebox.pack_start(timebox_label, True,True,0)
+        self.timebox.pack_start(self.cycle_time, True, True, 0)
+        self.grid.attach(self.timebox, 1, 5, 2, 1)
+
+        self.folder_button=self.build_button(0, "folder-open", 32, _("Select Folder"))
+        self.folder_button.connect("clicked", Folder_Select)
+        
+        self.colour_button=self.build_button(0, "gcolor", 32, _("Select Colour"))
+        self.colour_button.connect("clicked", Colour_Select)
+        
+        self.picture_button=self.build_button(0, "insert-image", 32, _("Select Picture"))
+        self.picture_button.connect("clicked", Picture_Select)
+        
+        close_button=self.build_button(0, "window-close", 32, _("Close"))
+        close_button.connect("clicked", lambda w: Gtk.main_quit())
+        
+        ok_button=self.build_button(0, "gtk-apply", 32, _("Apply"))
+        ok_button.connect("clicked", self.set)
+
+        buttonbox = Gtk.HButtonBox()
+        buttonbox.pack_start(self.folder_button, 0,0,0)
+        buttonbox.pack_start(self.colour_button, 0,0,0)
+        buttonbox.pack_start(self.picture_button,0,0,0)
+        buttonbox.pack_start(close_button, 0,0,0)
+        buttonbox.pack_start(ok_button, 0,0,0)
+        self.grid.attach(buttonbox, 2,6,1,1)
+        buttonbox.show_all()
+
+Var = Var()
+win = mainWindow()
+win.combochange('fill')
+win.connect("delete-event", Gtk.main_quit)
+import signal
+signal.signal(signal.SIGINT, signal.SIG_DFL) # without this, Ctrl+C from parent term is ineffectual
+Gtk.main()

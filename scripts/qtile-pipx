@@ -1,0 +1,2 @@
+#!/bin/bash
+exec /home/USER/.local/bin/qtile start

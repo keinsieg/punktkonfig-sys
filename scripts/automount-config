@@ -1,0 +1,214 @@
+#!/bin/bash
+
+#automount-configuration script for auto-mount in desktop-session startup file
+
+
+# translations stuff
+TEXTDOMAINDIR=/usr/share/locale
+TEXTDOMAIN=automount-antix
+
+# translation text as variables
+APPLY=$"Apply"
+CLOSE=$"Close"
+TITLE=$"Automount Configuration"
+USBDEVICES=$"usb devices"
+OPTICALDEVICES=$"optical discs"
+LABEL1=$"Automount External Devices"
+LABEL1a=$"\n"
+LABEL2=$"Open Default File Manager on Mount"
+LABEL2a=$"Do Not Change zzzfm automount settings"
+DVDDEVICE=$"auto-launch preferred Video Player upon DVD insertion"
+AUDIODISC=$"auto-launch preferred Music Player upon insertion of Audio Disc"
+DVDCOMMANDLABEL=$"    DVD Command"
+AUDIODISCCOMMANDLABEL=$"    Audio Disc Command"
+
+#make sure automount.conf ends with a new line
+sed -i -e '$a\' /home/$USER/.desktop-session/automount.conf
+
+get_selections()
+{
+AUTOMOUNT=$(grep automount= /home/$USER/.desktop-session/automount.conf|cut -d= -f2)
+FM_USB=$(grep fm_usb /home/$USER/.desktop-session/automount.conf|cut -d= -f2)
+FM_OPTICAL=$(grep fm_optical /home/$USER/.desktop-session/automount.conf|cut -d= -f2)
+VP_DVD=$(grep vp_dvd /home/$USER/.desktop-session/automount.conf|cut -d= -f2)
+DVD_COMMAND=$(grep dvd_command /home/$USER/.desktop-session/automount.conf|cut -d= -f2)
+MP_AUDIO=$(grep mp_audio /home/$USER/.desktop-session/automount.conf|cut -d= -f2)
+AUDIO_COMMAND=$(grep audio_command /home/$USER/.desktop-session/automount.conf|cut -d= -f2)
+ZZZFM_OVERRIDE=$(grep ZZZFM_OVERRIDE /home/$USER/.desktop-session/automount.conf|cut -d= -f2)
+
+#devmon --exec-on-drive "desktop-defaults-run -fm %d" --exec-on-disc "desktop-defaults-run -fm %d" &
+
+#set up selection gui
+
+selections=$(yad --form --title="$TITLE" --center --window-icon=drive-removable-media --button="$APPLY"!emblem-default!:0 --button="$CLOSE"!process-stop!:1 --width=690\
+    --field="$LABEL1":CHK "$AUTOMOUNT"\
+    --field="$LABEL2a":CHK "$ZZZFM_OVERRIDE"\
+    --field="":LBL ""\
+    --field="$LABEL2":LBL ""\
+    --field=" $USBDEVICES":CHK "$FM_USB"\
+    --field=" $OPTICALDEVICES":CHK "$FM_OPTICAL"\
+    --field=" $DVDDEVICE":CHK "$VP_DVD"\
+    --field="       $DVDCOMMANDLABEL": "$DVD_COMMAND"\
+    --field=" $AUDIODISC":CHK "$MP_AUDIO"\
+    --field="       $AUDIODISCCOMMANDLABEL": "$AUDIO_COMMAND"\
+    --field="%f = device (/dev/XXX), %d = mountpoint (/media/XXX)":LBL)
+}
+
+actions()
+{
+
+#capture the exit code from the selection dialog
+status2=$?
+
+#echo $status2
+
+#decide what to do, based on exit code
+case $status2 in
+
+    0) adjust_settings
+           ;;
+    1) quit
+           ;;
+    252) quit
+            ;;
+esac
+}
+
+adjust_settings()
+{
+# kill existing devmon running by the user
+
+pkill -x -u $USER devmon
+echo $selections
+
+# get the new settings
+AUTOMOUNT=$(echo $selections|cut -d '|' -f1)
+FM_USB=$(echo $selections|cut -d '|' -f5)
+FM_OPTICAL=$(echo $selections|cut -d '|' -f6)
+VP_DVD=$(echo $selections|cut -d '|' -f7)
+DVD_COMMAND=$(echo $selections|cut -d '|' -f8)
+MP_AUDIO=$(echo $selections|cut -d '|' -f9)
+AUDIO_COMMAND=$(echo $selections|cut -d '|' -f10)
+ZZZFM_OVERRIDE=$(echo $selections|cut -d '|' -f2)
+
+
+#terminal output for new settings
+echo automount is :$AUTOMOUNT
+echo FM_USB is : $FM_USB
+echo FM_OPTICAL is: $FM_OPTICAL
+echo VP_DVD is : $VP_DVD
+echo DVD_COMMAND is : $DVD_COMMAND
+echo MP_AUDIO is : $MP_AUDIO
+echo AUDIO_COMMAND is : $AUDIO_COMMAND
+echo ZZZFM_OVERRIDE is : $ZZZFM_OVERRIDE
+
+#modify the autostart.conf file
+
+#zzzfm mount override
+if [ "$ZZZFM_OVERRIDE" = "TRUE" ] ; then
+sed -i s/ZZZFM_OVERRIDE=.*/ZZZFM_OVERRIDE=TRUE/ /home/$USER/.desktop-session/automount.conf
+else
+sed -i s/ZZZFM_OVERRIDE=.*/ZZZFM_OVERRIDE=FALSE/ /home/$USER/.desktop-session/automount.conf
+fi
+
+#automount
+if [ "$AUTOMOUNT" = "TRUE" ]; then
+    sed -i s/automount=.*/automount=TRUE/ /home/$USER/.desktop-session/automount.conf
+    if [ "$ZZZFM_OVERRIDE" = "FALSE" ]; then
+        if [ -e /home/$USER/.config/zzzfm/session ]; then
+                pkill zzzfm
+                sed -i s/dev_automount_optical-b=.*/dev_automount_optical-b=1/ /home/$USER/.config/zzzfm/session
+                sed -i s/dev_automount_removable-b=.*/dev_automount_removable-b=1/ /home/$USER/.config/zzzfm/session
+         fi
+    fi
+else
+    sed -i s/automount=.*/automount=FALSE/ /home/$USER/.desktop-session/automount.conf
+    if [ "$ZZZFM_OVERRIDE" = "FALSE" ]; then
+        if [ -e /home/$USER/.config/zzzfm/session ]; then
+                pkill zzzfm
+                sed -i s/dev_automount_optical-b=.*/dev_automount_optical-b=0/ /home/$USER/.config/zzzfm/session
+                sed -i s/dev_automount_removable-b=.*/dev_automount_removable-b=0/ /home/$USER/.config/zzzfm/session
+        fi
+    fi
+fi
+
+#pop open default filemanager for usb device mount
+if [ "$FM_USB" = "TRUE" ]; then
+sed -i s/fm_usb=.*/fm_usb=TRUE/ /home/$USER/.desktop-session/automount.conf
+else
+sed -i s/fm_usb=.*/fm_usb=FALSE/ /home/$USER/.desktop-session/automount.conf
+fi
+
+#pop open default filemanager for optical disc mount
+if [ "$FM_OPTICAL" = "TRUE" ]; then
+sed -i s/fm_optical=.*/fm_optical=TRUE/ /home/$USER/.desktop-session/automount.conf
+else
+sed -i s/fm_optical=.*/fm_optical=FALSE/ /home/$USER/.desktop-session/automount.conf
+fi
+
+#use command to play dvd disc on insert
+if [ "$VP_DVD" = "TRUE" ]; then
+sed -i s/vp_dvd=.*/vp_dvd=TRUE/ /home/$USER/.desktop-session/automount.conf
+else
+sed -i s/vp_dvd=.*/vp_dvd=FALSE/ /home/$USER/.desktop-session/automount.conf
+fi
+
+#use command to play audio disc on insert
+if [ "$MP_AUDIO" = "TRUE" ]; then
+sed -i s/mp_audio=.*/mp_audio=TRUE/ /home/$USER/.desktop-session/automount.conf
+else
+sed -i s/mp_audio=.*/mp_audio=FALSE/ /home/$USER/.desktop-session/automount.conf
+fi
+
+# set dvd disk player commands
+sed -i /dvd_command=.*/d /home/$USER/.desktop-session/automount.conf
+echo dvd_command=$DVD_COMMAND >>/home/$USER/.desktop-session/automount.conf
+
+#set the audio player command
+sed -i /audio_command=.*/d /home/$USER/.desktop-session/automount.conf
+echo audio_command=$AUDIO_COMMAND >>/home/$USER/.desktop-session/automount.conf
+
+#kill conky if running, then restart desktop-session which will also restart conky
+if [ $(pidof conky) ]; then
+    pkill conky
+fi
+/usr/local/lib/desktop-session/desktop-session-restart &
+#let things settle down before bringing back the selection dialog
+sleep 5 
+
+#restart automount-antix in case disabled in startup files
+bash -c automount-antix &
+
+#tell the gui to loop
+actionstatus=0
+}
+
+quit()
+{
+    actionstatus=1
+}
+
+##start gui and run actions
+## this is actually gets things started.  everything up to now is definition of functions and variables
+
+#update config file with new zzzfm override setting, if necessary
+if [ "$(grep ZZZFM_OVERRIDE /home/$USER/.desktop-session/automount.conf)" = "" ]; then
+    echo "ZZZFM_OVERRIDE=FALSE">>/home/$USER/.desktop-session/automount.conf
+fi
+
+
+# set initial status
+status=0
+
+while [ $status = "0" ]; do
+
+    #start the parent dialog
+    get_selections
+
+    #once selection is made, use action function to decide what to do
+    actions
+
+    #app status is the same as whatever the last actionstatus is.  If 0, the while loop starts everything over
+    status=$actionstatus
+
+done

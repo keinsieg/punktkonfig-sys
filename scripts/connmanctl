@@ -1,0 +1,18 @@
+#!/bin/bash
+
+cat<<Hints
+
+Commands for making a wifi connections in connmanctl
+----------------------------------------------------
+    agent on
+    enable wifi
+    services
+    connect wifi_<tab>
+    [wait for connection to appear]
+    quit
+    ifconfig -s
+----------------------------------------------------
+
+Hints
+
+exec /usr/bin/connmanctl "$@"

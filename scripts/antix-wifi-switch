@@ -1,0 +1,589 @@
+#!/bin/bash
+
+###################### Wi-Fi switch for antiX 19 ######################
+# Program to switch between ceni and connman for antiX 19
+#######################################################################
+
+# Translation
+TEXTDOMAINDIR=/usr/share/locale
+TEXTDOMAIN=antix-wifi-switch
+
+#### Program properties ####
+ME=${0##*/}
+VERSION="0.2.1"
+VERSION_DATE="Thu 08 Jul 2021"
+LOG_FILE="$HOME/.wifi-switcher.log"
+# Initial value
+PROGRAM_INTERFACE="GUI"
+SWITCH_NM=""
+SYSTEM_INIT="$(cat /proc/1/comm)"
+echo "INIT: $SYSTEM_INIT"
+
+#check if using desktop-defaults (antiX only)
+if [ -x /usr/local/bin/desktop-defaults-run ]; then
+    TERMINALEXEC="desktop-defaults-run -t"
+    #echo "desktop-session-antix installed"
+else
+    TERMINALEXEC="x-terminal-emulator -e"
+    #echo "no desktop-defaults-run"
+fi
+
+#### Show how to use this program ####
+usage() {
+echo $"Usage: $ME [<options>] [ceni|connman]"
+echo ''
+echo $"Switch between ceni and connman easily. Can be launched in terminal
+or gui mode. You can also specify the program directly to reduce steps."
+echo ''
+echo $"	   ceni:  will automatically switch to ceni to manage your network
+	connman:  will remove all ceni configurations and launch connman"
+echo ''
+echo $"Options:
+	-c --cli	Launches in terminal mode
+	-g --gui	Launches a yad gui (requires yad to be installed)
+	-h --help	Show this usage
+	-v --version	Show version information"
+echo ''
+echo $"Notes:
+	- For now only connman and ceni are configured. Specially built for
+	antiX 19. Should work for any antiX flavor (core, base or full)"
+    exit 1
+}
+
+#### Show version number ####
+show_version(){
+    echo "${ME} version ${VERSION} (${VERSION_DATE})"
+    exit 0
+}
+
+#### Log errors and display them in terminal if possible)
+log_error(){
+    LOG_MESSAGE="${@}"
+    echo "$(date)" >> $LOG_FILE
+    echo "ERROR: $LOG_MESSAGE" |tee -a $LOG_FILE
+}
+
+#### MAIN ####
+main(){
+    # Check if a switch has been asked
+    if [ -n "$SWITCH_NM" ]; then
+        # If the requested program isn't installed, quit program
+        if [[ "$(check_installed "$SWITCH_NM")" == "no" ]]; then
+            log_error $"$SWITCH_NM is not installed. Switching is impossible"
+        else
+            # Switch to specified network manager
+            case $SWITCH_NM in
+                ceni) switch_to_ceni;;
+                connman) switch_to_connman;;
+                *) log_error $"Option $SWITCH_NM not yet available"; exit 1;;
+            esac
+        fi
+    # Launch a selection program/window
+    else
+        # Check if connman and ceni are installed
+        local CENI_INST="$(check_installed "ceni")"
+        local CONNMAN_INST="$(check_installed "connman")"
+        # Default values
+        local SELECT_OPTIONS="both"
+        local TEXT_MESSAGE=$"Select the program to manage your Wi-Fi"
+        local SELECT_MESSAGE="ceni, connman,"
+        local CENI_BUTTON=$"--field=\"CENI!ceni!Switch to ceni\":FBTN 'bash -c switch_to_ceni'"
+        local CENI_SWITCH="switch_to_ceni; break"
+        local CONNMAN_BUTTON=$"--field=\"CONNMAN!connman!Switch to connman\":FBTN 'bash -c switch_to_connman'"
+        local CONNMAN_SWITCH="switch_to_connman; break"
+        
+        # if both are missing, switch is impossible
+        if [[ "$CENI_INST" == "no" ]] && [[ "$CONNMAN_INST" == "no" ]]; then
+            SELECT_OPTIONS="non"
+            TEXT_MESSAGE=$"ceni and connman are not installed. Switching is impossible."
+            log_error "$TEXT_MESSAGE"
+            if [[ "$PROGRAM_INTERFACE" == "GUI" ]]; then
+                # Yad error window
+                yad --text="$TEXT_MESSAGE" --text-align=center --wrap --borders=10 \
+                --width=250 --image="gtk-dialog-error" --window-icon="gtk-dialog-error" \
+                --title=$"Switch impossible" --button='gtk-close':1
+            fi
+            exit 1
+            
+        # If only one of them is missing, different message
+        elif [[ "$CENI_INST" == "no" ]] || [[ "$CONNMAN_INST" == "no" ]]; then
+            if [[ "$CENI_INST" != "no" ]]; then
+                SELECT_OPTIONS="ceni"
+                CONNMAN_BUTTON="--field=\" \":LBL ''"
+                CONNMAN_SWITCH=$"echo \"connman is not installed. Not a valid option.\""
+            elif [[ "$CONNMAN_INST" != "no" ]]; then
+                SELECT_OPTIONS="connman"
+                CENI_BUTTON="--field=\" \":LBL ''"
+                CENI_SWITCH=$"echo \"ceni is not installed. Not a valid option.\""
+            fi
+            TEXT_MESSAGE=$"$SELECT_OPTIONS is the only available program."
+            SELECT_MESSAGE="${SELECT_OPTIONS},"
+        fi
+        
+        # Check if GUI is being asked
+        if [[ "$PROGRAM_INTERFACE" == "GUI" ]]; then
+            echo "$TEXT_MESSAGE"
+            # yad window
+            YAD_TITLE=$"Switch Wi-Fi program"
+            eval "yad --text=\"$TEXT_MESSAGE \\n\" --text-align=center --borders=10 \
+                --width=200 --window-icon=network-assistant --keep-icon-size \
+                --class=\"$ME\" --name=\"Switch-Wifi\" --center \
+                --form $CENI_BUTTON $CONNMAN_BUTTON --title=\"$YAD_TITLE\" \
+                --button='gtk-close':1"
+        
+        # Terminal for selecting the switch
+        else
+            # CLI operation
+            while true; do
+                printf "${TEXT_MESSAGE}\n"
+                read -p $"Switch to? (${SELECT_MESSAGE} or q to quit) " nmselection
+                case $nmselection in
+                    ceni ) eval "$CENI_SWITCH";;
+                    connman ) eval "$CONNMAN_SWITCH";;
+                    q|Q ) echo $"Exiting $ME without switching."; break;;
+                    * ) echo $"Please answer $SELECT_MESSAGE or q to quit"; echo "";;
+                esac
+            done
+        fi
+    fi
+}
+
+#### Check if the corresponding network manager is installed ####
+check_installed(){
+    local NETWORK_MANAGER="${1}"
+    # Default value
+    local NM_PROGRAM="no"
+    
+    # Check what network manager was selected
+    case $NETWORK_MANAGER in
+        connman)
+            if [ -x /usr/bin/connmanctl ]; then
+                # Check if cmst is installed
+                if [ -x /usr/bin/cmst ]; then
+                    NM_PROGRAM="cmst"
+                # Check if connman-ui is installed
+                elif [ -x /usr/bin/connman-ui-gtk ]; then
+                    NM_PROGRAM="connman-ui-gtk"
+                # Default to connmanctl
+                else
+                    NM_PROGRAM="connmanctl"
+                fi
+            fi
+            ;;
+        ceni)
+            if [ -x /usr/sbin/ceni ]; then
+                NM_PROGRAM="ceni"
+            fi
+            ;;
+        *) NM_PROGRAM="no";;
+    esac
+    # Function output
+    echo "$NM_PROGRAM"
+}
+
+#### Check where /etc/resolv.conf is symlinking to ####
+check_resolvconf(){
+    local CHECK_FOR="${1}"
+    
+    # Variables
+    local RESOLV_CONF_DEFAULT="/run/resolvconf/resolv.conf"
+    local RESOLV_CONF_CENI="/etc/resolvconf/run/resolv.conf"
+    if [ ! -f "$RESOLV_CONF_CENI" ]; then RESOLV_CONF_CENI="$RESOLV_CONF_DEFAULT"; fi
+    local RESOLV_CONF_CONNMAN="/run/connman/resolv.conf"
+    if [ ! -f "$RESOLV_CONF_CONNMAN" ]; then RESOLV_CONF_CONNMAN="$RESOLV_CONF_DEFAULT"; fi
+    local RESOLV_CONF_TARGET="$(readlink /etc/resolv.conf)"
+    local CURRENT_RESOLV_CONF="not found"
+    # Resolv.conf doesn't exist
+    if [ ! -e /etc/resolv.conf ] || [ ! -n "$RESOLV_CONF_TARGET" ]; then
+        CURRENT_RESOLV_CONF="not found"
+    # Resolv.conf for ceni (general)
+    elif [[ "$RESOLV_CONF_TARGET" == "$RESOLV_CONF_CENI" ]]; then
+        CURRENT_RESOLV_CONF="ceni"
+    # Resolv.conf for connman
+    elif [[ "$RESOLV_CONF_TARGET" == "$RESOLV_CONF_CONNMAN" ]]; then
+        CURRENT_RESOLV_CONF="connman"
+    # Result not expected by the script
+    else
+        CURRENT_RESOLV_CONF="$RESOLV_CONF_TARGET"
+    fi
+    echo $"resolv.conf current configuration: $CURRENT_RESOLV_CONF"
+    
+    # Check if resolv.conf needs to be replaced
+    if [ -n "$CHECK_FOR" ] && [[ "$CURRENT_RESOLV_CONF" != "$RESOLV_CONF_TARGET" ]]; then
+        # Force replace the resolv.conf symbolic link
+        if [[ "$CHECK_FOR" != "$CURRENT_RESOLV_CONF" ]]; then
+            if [[ "$CHECK_FOR" == "ceni" ]]; then
+                check_sudo rm /etc/resolv.conf
+                check_sudo ln -s $RESOLV_CONF_CENI /etc/resolv.conf
+            elif [[ "$CHECK_FOR" == "connman" ]]; then
+                check_sudo rm /etc/resolv.conf
+                check_sudo ln -s $RESOLV_CONF_CONNMAN /etc/resolv.conf
+            fi
+            echo $"/etc/resolv.conf new symbolic link: $(readlink /etc/resolv.conf)"
+        fi 
+    # Special resolv.conf file
+    elif [[ "$CURRENT_RESOLV_CONF" == "$RESOLV_CONF_TARGET" ]]; then
+        echo $"You are using a custom /etc/resolv.conf file. \
+This case is not contemplated by the script."
+    # Informing the user that the file doesn't exist
+    elif [[ "$CURRENT_RESOLV_CONF" == "not found" ]]; then
+        echo $"WARNING: you don't have a /etc/resolv.conf file."
+    # Just informing you
+    else
+        echo $"Your current /etc/resolv.conf file is ideal for $CURRENT_RESOLV_CONF"
+    fi
+}
+
+#### Enable Wifi if it is softblocked ####
+enable_wifi(){
+    # Check if wifi is locked and unlock if possible.
+    if [ $(rfkill list wifi | grep -c "Soft blocked: yes" 2>/dev/null) -gt 0 ]; then
+        echo $"Wi-Fi softblocked."
+        # Use connmanctl (if installed) to enable wifi
+        if [ -x /usr/bin/connmanctl ]; then
+            echo $"Enabling WIFI with connman"
+            # Start connman service if not on.
+            if [[ "$(service_command connman status)" = "OFF" ]]; then
+                CONNMAN_ORIGINAL="off"
+                echo $"starting connman service"
+                service_command connman start
+            else
+                CONNMAN_ORIGINAL="on"
+                echo $"Restarting connman service just in case"
+                service_command connman restart
+            fi
+            # Enabling wifi with connmanctl
+            echo $"Enabling Wi-Fi..."
+            connmanctl enable wifi
+            rfkill unblock wifi # fallback in case connman command fails
+            # Give enough time for WIFI to be unblocked
+            sleep 4
+            # Turn off connman service if it was OFF initially
+            if [[ "$CONNMAN_ORIGINAL" == "off" ]]; then
+                echo $"Stopping connman service"
+                service_command connman stop
+            fi
+        # Unblock WIFI using rfkill directly
+        else
+            echo $"Unblocking Wi-Fi with rfkill..."
+            rfkill unblock wifi; sleep 4
+        fi
+        # If this is still not enough, use RFKIL to unblock ALL
+        # Pending ...
+    fi
+    
+    # Check if wifi is hardblocked. If so, inform the user
+    if [ $(rfkill list wifi | grep -c "Hard blocked: yes" 2>/dev/null) -gt 0 ]; then
+        # Inform the user that their wifi may be hardware blocked
+        local ERROR_TITLE=$"WIFI HARD BLOCKED"
+        local ERROR_MESSAGE=$"Your Wi-Fi may be Hard blocked. If you cannot scan \
+for any network, unlock the wifi with the corresponding button or BIOS option."
+        log_error "$ERROR_TITLE. $ERROR_MESSAGE"
+        # yad gui
+        if [[ "$PROGRAM_INTERFACE" == "GUI" ]]; then
+            yad --text="$ERROR_MESSAGE" --text-align=center --wrap --borders=10 \
+                --width=250 --image="gtk-dialog-error" --window-icon="gtk-dialog-error" \
+                --title="$ERROR_TITLE" --button='gtk-close':1
+        fi
+    fi
+}
+
+#### CENI will launch after supressing all connman changes ####
+switch_to_ceni(){
+    echo $"Switching to ceni"
+    # 0. Enable Wifi
+    enable_wifi "ceni"
+    # 1. Check if connman is running. Stop connman (program and service). And remove from startup
+    CONNMAN_PROGRAM="$(check_installed "connman")"
+    service_command connman status
+    if [[ "$CONNMAN_PROGRAM" != "no" ]] && [[ "$(service_command connman status)" == "ON" ]]; then
+        echo $"Stopping Connman program and service"
+        check_sudo killall $CONNMAN_PROGRAM
+        service_command connman stop
+        service_command connman disable
+    fi
+    #~ if [[ "$CONNMAN_PROGRAM" != "no" ]] && [ $(cat ~/.desktop-session/startup | grep -c "^${CONNMAN_PROGRAM}") -gt 0 ]; then
+        #~ echo $"Removing $CONNMAN_PROGRAM from startup"
+        #~ sed -i "/^$CONNMAN_PROGRAM/s/^/#/" ~/.desktop-session/startup
+    #~ fi
+    # 2. Check what /etc/resolv.conf is working and replace it with the correct one.
+    check_resolvconf "ceni"
+    # 3. Restart networking service and launch ceni.
+    #~ echo $"Stopping all wpa_supplicant processes"
+    #~ check_sudo killall wpa_supplicant
+    service_command resolvconf start
+    echo $"Restarting networking service"
+    service_command networking reload
+    echo $"Launching ceni"
+    if [[ "$PROGRAM_INTERFACE" == "GUI" ]]; then
+        eval "$TERMINALEXEC sudo ceni &"
+        # yad window informing user
+        yad --text=$"<b>ceni</b> should now be able to connect to your Wireless Access Point." \
+        --text-align=center --width=250 --wrap --image="gtk-dialog-info" \
+        --window-icon="gtk-dialog-info" --title=$"CENI set" --borders=10 --center \
+        --buttons-layout=center --button='gtk-close':0
+    else
+        sudo ceni
+    fi
+}
+
+#### Connman will launch after supressing all ceni changes ####
+switch_to_connman(){
+    echo $"Switching to Connman"
+    # 0. Enable Wifi
+    enable_wifi "connman"
+    # 1. Check if /etc/network/interfaces has been "contaminated" by ceni.
+    local WLAN_INTERFACES
+    WLAN_INTERFACES="$(check_sudo cat /etc/network/interfaces)"
+    if [ $(echo "$WLAN_INTERFACES" | grep -ic "wlan") -gt 0 ]; then
+        # Position above first wlan entry
+        REMOVE_LINE=$(echo "$WLAN_INTERFACES" | grep -ni -m1 "wlan" | cut -d":" -f1)
+        REMOVE_LINE=$((--REMOVE_LINE))
+        # Message
+        CENI_WLAN_CONT=$"WLAN entries have been found in /etc/network/interfaces.\n\
+Keeping them will block connman from properly connecting to Wi-Fi.\n"
+    else
+        # Position after which the file will be "cleaned"
+        REMOVE_LINE=9
+        # Message
+        CENI_WLAN_CONT=$"No WLAN entries were found in /etc/network/interfaces.\n\
+We recommend only modifying this file if you keep experiencing \n\
+wifi connection problems with connman.\n"
+    fi
+    if [[ "$PROGRAM_INTERFACE" == "GUI" ]]; then
+        # GUI operation
+        yad --text=$"${CENI_WLAN_CONT}Edit the file?" --text-align=center --wrap --borders=10 \
+            --window-icon="gtk-dialog-error" --title=$"Edit /etc/network/interfaces" \
+            --button='gtk-ok':0 --button='gtk-no':1 --buttons-layout=center
+        local exitcode=$?
+        if [ $exitcode -eq 0 ] && [ $REMOVE_LINE -gt 8 ]; then
+            check_sudo sed -i ${REMOVE_LINE}q /etc/network/interfaces
+        fi
+    else
+        # CLI operation
+        YES_STRING=$"[Yy]*"
+        NO_STRING=$"[Nn]*"
+        while true; do
+            printf "$CENI_WLAN_CONT"
+            read -p $"Modify the file? (y/n) " yn
+            case $yn in
+                ${YES_STRING} ) echo $"Deleting info from /etc/network/interfaces"
+                    sudo sed -i ${REMOVE_LINE}q /etc/network/interfaces; break;;
+                ${NO_STRING} ) echo $"/etc/network/interfaces will not be changed"; break;;
+                * ) echo $"Please answer yes or no."; echo "";;
+            esac
+        done
+    fi
+    # 2. Check what /etc/resolv.conf is working and replace it with the correct one.
+    check_resolvconf "connman"
+    # 3. Restart networking service and connman service.
+    echo $"Stopping all wpa_supplicant processes"
+    check_sudo killall wpa_supplicant
+    echo $"Restoring sysvinit connman service"
+    service_command connman enable
+    #~ echo $"Restarting networking service"
+    #~ service_command networking restart
+    echo $"Restarting connman service"
+    service_command connman restart
+    sleep 4
+    # 4. launch connman gui if available
+    if [[ "$PROGRAM_INTERFACE" == "GUI" ]]; then
+        CONNMAN_PROGRAM="$(check_installed "connman")"
+        #~ if [[ "$CONNMAN_PROGRAM" != "no" ]] && [ $(cat ~/.desktop-session/startup | grep -c "^#${CONNMAN_PROGRAM}") -gt 0 ]; then
+            #~ echo $"Adding $CONNMAN_PROGRAM to startup"
+            #~ sed -i "/^#$CONNMAN_PROGRAM/s/^#//" ~/.desktop-session/startup
+        #~ fi
+        echo $"Launching $CONNMAN_PROGRAM"
+        if [[ "$CONNMAN_PROGRAM" == "connmanctl" ]]; then
+            eval $TERMINALEXEC connmanctl &
+        else
+            # kill the program if already running
+            killall "$CONNMAN_PROGRAM"
+            # Launch the program
+            eval "$CONNMAN_PROGRAM &"
+        fi
+        #yad window informing user
+        yad --text=$"<b>Connman</b> should now be able to connect to your Wireless Access Point." \
+        --text-align=center --width=250 --wrap --image="gtk-dialog-info" --center \
+        --window-icon="gtk-dialog-info" --title=$"Connman set" --borders=10 \
+        --buttons-layout=center --button='gtk-close':0
+    else
+        echo $"Launching connmanctl"
+        connmanctl
+    fi
+}
+
+#### Check sudo for gui and terminal cases ####
+check_sudo(){
+    local EXE_STRING="${@}"
+    local SUDO_COMMAND="sudo"
+    
+    #If sudo is active or the user is root
+    if [[ $EUID -eq 0 ]] || $(sudo -n true 2>/dev/null); then
+        SUDO_COMMAND="sudo"
+    ## Check if not root
+    elif [[ $EUID -ne 0 ]] && [[ "$PROGRAM_INTERFACE" == "GUI" ]]; then
+        # gksu exists
+        if [ -x /usr/bin/gksu ]; then SUDO_COMMAND="gksudo";
+        # simply use sudo
+        else SUDO_COMMAND="x-terminal-emulator -T \"Give SU powers\" -e /bin/bash -c \"sudo\"";
+        fi
+    fi
+    #run sudo command
+    #echo "sudo command: $SUDO_COMMAND $EXE_STRING"
+    eval "$SUDO_COMMAND $EXE_STRING"
+}
+
+# Depending on the init system, use different service command
+service_command(){
+    local SERVICE_NAME="${1}"
+    local SERVICE_ACTION="${2}"
+    local SERVICE_STATUS SERVICE_FILE
+    
+    # RUNIT with runit services (antiX 21 implementation)
+    if [[ "$SYSTEM_INIT" == "runit" ]] && [ -d /etc/runit-core ]; then
+        case $SERVICE_ACTION in
+            enable)
+                echo "RUNIT service $SERVICE_NAME (enable)"
+                if [[ -d "/etc/sv/$SERVICE_NAME" ]]; then
+                    # Remove the down file If it exists)
+                    if [ -f "/etc/sv/$SERVICE_NAME/down" ]; then
+                        check_sudo rm "/etc/sv/$SERVICE_NAME/down"
+                        echo "removing down file for $SERVICE_NAME"
+                    fi
+                    # enable service at boot-time
+                    if [ ! -e "/etc/service/$SERVICE_NAME" ]; then
+                        check_sudo ln -s "/etc/sv/$SERVICE_NAME" "/etc/service/$SERVICE_NAME"
+                        echo "creating symlink /etc/service/$SERVICE_NAME"
+                    fi
+                fi
+                ;;
+            disable)
+                echo "RUNIT service $SERVICE_NAME (disable)"
+                if [ -d "/etc/sv/$SERVICE_NAME" ]; then
+                    # Add the down file If it exists)
+                    if [ ! -f "/etc/sv/$SERVICE_NAME/down" ]; then
+                        check_sudo touch "/etc/sv/$SERVICE_NAME/down"
+                        echo "creating down file for $SERVICE_NAME"
+                    fi
+                    # disable service at boot-time
+                    if [ -e "/etc/service/$SERVICE_NAME" ]; then
+                        check_sudo rm "/etc/service/$SERVICE_NAME"
+                        echo "removing /etc/service/$SERVICE_NAME"
+                    fi
+                fi
+                ;;
+            status)
+                SERVICE_STATUS="$(check_sudo sv status $SERVICE_NAME)"
+                SERVICE_STATUS="$(echo "$SERVICE_STATUS" | cut -d":" -f1)"
+                if [[ "$SERVICE_STATUS" == "run" ]]; then
+                    echo "ON"
+                else
+                    echo "OFF"
+                fi
+                ;;
+            start|stop|restart|reload)
+                echo "RUNIT service $SERVICE_NAME ($SERVICE_ACTION)"
+                if [[ -d "/etc/service/$SERVICE_NAME" ]]; then
+                    # Remove the down file If it exists)
+                    if [[ -f "/etc/sv/$SERVICE_NAME/down" ]]; then
+                        check_sudo rm "/etc/sv/$SERVICE_NAME/down"
+                    fi
+                    # start runit service
+                    check_sudo sv "$SERVICE_ACTION" "$SERVICE_NAME"
+                    
+                elif [[ $(ls -1 /etc/runit-core/ | grep -c "S.[1-9]${SERVICE_NAME}$") -gt 0 ]]; then
+                    SERVICE_FILE="$(ls -1 /etc/runit-core/ | grep -i -m1 "S.[1-9]${SERVICE_NAME}$")"
+                    # change init service init service
+                    check_sudo "/etc/runit-core/$SERVICE_FILE $SERVICE_ACTION"
+                else
+                    if [[ -f "/etc/init.d/$SERVICE_NAME" ]]; then
+                        check_sudo service "$SERVICE_NAME" "$SERVICE_ACTION"
+                    fi
+                fi
+                ;;
+            *) echo "No idea what to do"
+                ;;
+        esac
+    # init.d service control
+    else
+        case $SERVICE_ACTION in
+            enable)
+                check_sudo update-rc.d "$SERVICE_NAME" defaults
+                ;;
+            disable)
+                check_sudo update-rc.d "$SERVICE_NAME" remove
+                ;;
+            status)
+                SERVICE_STATUS="$(check_sudo service $SERVICE_NAME status)"
+                if [[ $(echo "$SERVICE_STATUS" | grep -ic "FAIL") -gt 0 ]]; then
+                    echo "OFF"
+                else
+                    echo "ON"
+                fi
+                ;;
+            start|stop|restart|reload)
+                check_sudo service "$SERVICE_NAME" "$SERVICE_ACTION"
+                ;;
+            *) echo "No idea what to do"
+                ;;
+        esac
+    fi
+}
+
+#~ cleanup() {
+    #~ echo "Cleanup and exiting"
+#~ }
+
+# Set trap on EXIT for cleanup
+#~ trap cleanup EXIT
+
+# Export functions
+export -f usage
+export -f show_version
+export -f log_error
+export -f main
+export -f check_installed
+export -f check_resolvconf
+export -f enable_wifi
+export -f switch_to_ceni
+export -f switch_to_connman
+export -f check_sudo
+export -f service_command
+#~ export -f cleanup
+
+# Export variables
+export ME
+export VERSION
+export VERSION_DATE
+export PROGRAM_INTERFACE
+export SWITCH_NM
+export TERMINALEXEC
+export SYSTEM_INIT
+
+#### START ####
+# Check if any input/options provided
+while [[ $# -ge 1 ]]; do
+    case $1 in
+        ceni) SWITCH_NM="ceni";;
+        connman) SWITCH_NM="connman";;
+        --cli|-c) PROGRAM_INTERFACE="CLI";;
+        --gui|-g) PROGRAM_INTERFACE="GUI";;
+        --version|-v) show_version;;
+        --help|-h) usage;;
+    esac
+    shift
+done
+
+# Correct if XORG is not running 
+if [ ! -n "$DISPLAY" ]; then
+    PROGRAM_INTERFACE="CLI"
+# Warn user if yad is not installed and gui has been selected
+elif [[ "$PROGRAM_INTERFACE" == "GUI" ]] && [ ! -x /usr/bin/yad ]; then
+    echo $"yad is not installed or cannot be found."
+    echo $"Defaulting to Terminal"
+    PROGRAM_INTERFACE="CLI"
+fi
+
+### Go to main window ####
+main

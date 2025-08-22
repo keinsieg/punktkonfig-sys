@@ -1,0 +1,52 @@
+#!/bin/bash
+#Small script for antiX Linux Menu:  basic GUI to manage trash-cli trash can
+#By PPC, 24/1/2023 GPL license, please keep this atribution, but feel free to use or adapt this script any way you want
+
+window_title=$"Trash can manager"
+empty_trash_text=$"  Are you sure you want to empty the trash can?  "
+empty_trash_button=$"Empty trash"
+delete_button=$"Empty Trash"
+main_window_text1=$"\n Your trash can is currently using "
+main_window_text2=$" of your disk space.\n Free space in your home folder is:"
+main_window_text3=$"\n \n Note: you can use your file manager to simply drag file(s) or folder(s) from the Trash Can back to where you want them,\n or do it by manually selecting their number from a list, using the button '$empty_trash_button' \n"
+restore_from_trash_button=$"Manually restore a file from trash"
+finished_text=$" Done "
+title_terminal=$"Select file to undelete"
+error_undeleting_message=$"Error. Something went wrong. \n Please check if you entered a valid selection."
+
+trash_size=$(du -h ~/.local/share/Trash/files| awk '{print $1;}')
+free_space=$(df  -Ph . | sed 1d | grep -v used | awk '{ print $4 "\t" }')
+
+yad --title="$window_title" --window-icon="/usr/share/icons/numix-square-antix/16x16/mimetypes/application-x-trash.png" --center --fixed\
+    --text="$main_window_text1 $trash_size $main_window_text2 $free_space $main_window_text3" \
+    --button="$restore_from_trash_button":0 \
+    --button="$empty_trash_button":2
+   
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -eq 0 ]; then
+
+	x-terminal-emulator -T "$title_terminal" -e /bin/bash -c " trash-restore && yad --image="/usr/share/icons/papirus-antix/48x48/emblems/emblem-rabbitvcs-normal.png" --center --borders=5 --width=250 --text-align=center  --text='$finished_text'  --window-icon="/usr/share/icons/numix-square-antix/16x16/mimetypes/application-x-trash.png"  --button=' x ' --title=$'$window_title' --fixed|| yad --borders=5 --center --window-icon="/usr/share/icons/numix-square-antix/16x16/mimetypes/application-x-trash.png"  --title='$window_title' --text='$error_undeleting_message' --button=' x ' --fixed --image='/usr/share/icons/papirus-antix/48x48/emblems/emblem-rabbitvcs-obstructed.png'"
+
+
+elif [ $EXIT_CODE -eq 2 ]; then
+
+	#Script to empty the trash
+	#First ask for conformation
+	yad --center --width=400 --title="$window_title"  --window-icon="/usr/share/icons/numix-square-antix/16x16/mimetypes/application-x-trash.png"  --text="$empty_trash_text" \
+	--button=gtk-cancel:1 \
+	--button="$delete_button":2 \
+    #analise user selection
+	foo=$?	
+	#If user clicked cancel, then exit
+	[[ $foo -eq 1 ]] && exit 0
+
+	#If user clicked "Emptyh trash, then do so and exit
+	if [[ $foo -eq 2 ]]; then
+		trash-empty
+	yad --center --width=300 --text-align=center --title="$window_title"  --window-icon="/usr/share/icons/numix-square-antix/16x16/mimetypes/application-x-trash.png"  --text="$finished_text" --button=" x " && exit 0
+
+	fi
+
+
+fi

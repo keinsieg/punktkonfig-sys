@@ -1,0 +1,181 @@
+#!/bin/bash
+
+###################### autoscale for HiDPI ######################
+# Program to check for small HiDPI displays, and if any found correct 
+#    scale and positions of subsequent displays
+#######################################################################
+
+TEXTDOMAINDIR=/usr/share/locale
+TEXTDOMAIN=autoscale-antix
+
+### Create $HOME/.screenlayout directory if it doesn't exist
+if [ ! -d "$HOME/.screenlayout/" ]; then mkdir "$HOME/.screenlayout"; fi
+
+### If there already is a ~/.desktop-session/set-screen configuration, exit script
+if [ -x "$HOME/.desktop-session/set-screen" ]; then
+	echo "set-screen already loaded. Exiting autoscale-antix"
+	exit 0
+### Load default.sh screen resolution/configuration
+elif [ -x "$HOME/.screenlayout/default.sh" ] ; then
+	echo "Loading .screenlayout/default.sh configuration..."
+	$HOME/.screenlayout/default.sh
+	exit 0
+fi
+
+### Check if there is already a font dpi setting
+if [ $(grep -c "Xft.dpi:" ~/.Xresources) -gt 0 ]; then
+	echo "DPI has been overriden (via boot option or other), so leave alone..."
+	exit 0
+fi
+
+### Don't launch again if it has already launched
+if [[ -s $AFTER_SCALE_INFO ]]; then
+	# Desktop was restarted, they already decided, and its in place
+	echo "AFTER_SCALE_INFO found, don't run again..."
+	exit 0
+fi
+
+### If running Virtual Machine
+if [ $(lscpu | grep -ic Hypervisor) -gt 0 ]; then
+	### Check if running on VirtulBox
+	if [ -e "/usr/bin/VBoxClient" ] && [ $(lspci | grep -ic "virtualbox") -gt 0 ]; then
+		### Check if Vbox display is running. Start if needed.
+		if [ $(ps -aux | grep -v grep | grep -c "VBoxClient --vmsvga") -eq 0 ]; then
+			echo "Launching VBox dynamic resizing..."
+			VBoxClient --vmsvga &
+		fi
+	fi
+	exit 0
+fi
+	
+### INITIALIZE VARIABLES AND TEMP FILES
+RESOLUTION_BASE=1200
+RESOLUTION_REF=1080
+MAX_PP_MM=9  #Over 9 pixels per mm will be too tiny
+NEXT_DISPLAY_START="0"
+# Use faster RAM temp instead of disk temp
+if [ -d "/dev/shm/" ]; then
+	BEFORE_SCALE_INFO=$(mktemp -p /dev/shm)
+	AFTER_SCALE_INFO=$(mktemp -p /dev/shm)
+	XRANDR_CMD=$(mktemp -p /dev/shm)
+else
+	BEFORE_SCALE_INFO=$(mktemp)
+	AFTER_SCALE_INFO=$(mktemp)
+	XRANDR_CMD=$(mktemp)
+fi
+export BEFORE_SCALE_INFO
+export AFTER_SCALE_INFO
+export XRANDR_CMD
+
+cleanup() {
+    ### Remove temporary files
+    rm -f -- "$BEFORE_SCALE_INFO"
+    rm -f -- "$AFTER_SCALE_INFO"
+    rm -f -- "$XRANDR_CMD"
+}
+
+### Set trap on EXIT for cleanup
+trap cleanup EXIT
+
+### Get xrandr information and scale HiDPI displays ###
+CONNECTED_MONITORS="$(xrandr -q | grep " connected")"
+while read -r line; do
+	DISPLAY_HEIGHT_MM="$(echo $line | rev | cut -d " " -f1 | rev | cut -d "m" -f1)"
+	DISPLAY_ID="$(echo $line | cut -d" " -f1)"
+	if [ $(echo "$line" | grep -c "primary") -gt 0 ]; then
+		DISPLAY_PRIMARY="--primary"
+	else
+		DISPLAY_PRIMARY=""
+	fi
+	DISPLAY_RES=""
+	DISPLAY_POS=""
+	DISPLAY_HPOS=0
+	XRANDR_RES_SEARCH="$(echo $line | cut -d" " -f3-5)"
+	for word in $XRANDR_RES_SEARCH; do
+		if [ $(echo $word | grep -c "+") -gt 0 ]; then
+			DISPLAY_RES="$(echo $word | cut -d "+" -f 1)"
+			DISPLAY_POS="$(echo $word | cut -d "+" -f 2- | sed 's/+/x/g')"
+			DISPLAY_HPOS="$(echo $DISPLAY_POS | cut -d "x" -f1)"
+			break
+		fi
+	done
+	
+	# If resolution was found, save and check for HiDPI
+	if [ $(echo "$DISPLAY_RES" | grep -c "x") -gt 0 ]; then
+		# Save Display, resolution and position
+		echo "$DISPLAY_ID $DISPLAY_RES $DISPLAY_POS" >> $BEFORE_SCALE_INFO
+		
+		# Check if pixel height / display height in mm /  is greater than max allowed
+		DISPLAY_HEIGHT="$(echo $DISPLAY_RES | cut -d "x" -f2)"
+		DISPLAY_PP_MM=$(($DISPLAY_HEIGHT / $DISPLAY_HEIGHT_MM))
+		DISPLAY_SCALE=1.0
+		if [ $DISPLAY_PP_MM -gt $MAX_PP_MM ]; then
+			# Too tiny, need to rescale
+			DISPLAY_SCALE="$(echo "scale=1; ${RESOLUTION_REF}/${DISPLAY_HEIGHT}" | bc)"
+			# Save Display, resolution and scale
+			echo "$DISPLAY_ID $DISPLAY_RES $DISPLAY_SCALE" >> $AFTER_SCALE_INFO
+			# Scale HiDPI display
+			NEW_XRANDR_COMMAND="xrandr --output $DISPLAY_ID $DISPLAY_PRIMARY --mode $DISPLAY_RES --pos ${NEXT_DISPLAY_START}x0 --scale \"${DISPLAY_SCALE}x${DISPLAY_SCALE}\""
+			echo "$NEW_XRANDR_COMMAND" >> $XRANDR_CMD
+			bash -c "$NEW_XRANDR_COMMAND"
+			# Inform user of scale changes
+			DISPLAY_INFO_MESSAGE=$"<b>Display</b>=$DISPLAY_ID,   <b>Resolution</b>=$DISPLAY_RES,   <b>Scale</b>=$DISPLAY_SCALE"
+			YAD_DISPLAY_MESSAGE="${YAD_DISPLAY_MESSAGE}\n $DISPLAY_INFO_MESSAGE"
+		elif [[ -s $AFTER_SCALE_INFO ]]; then
+			DISPLAY_SCALE="1"
+			# Save Display, resolution and scale
+			echo "$DISPLAY_ID $DISPLAY_RES $DISPLAY_SCALE" >> $AFTER_SCALE_INFO
+			# Scale HiDPI display
+			NEW_XRANDR_COMMAND="xrandr --output $DISPLAY_ID $DISPLAY_PRIMARY --mode $DISPLAY_RES --pos ${NEXT_DISPLAY_START}x0"
+			echo "$NEW_XRANDR_COMMAND" >> $XRANDR_CMD
+			bash -c "$NEW_XRANDR_COMMAND"
+		fi
+		DISPLAY_HRES="$(echo $DISPLAY_RES | rev | cut -d " " -f1 | rev | cut -d "x" -f1)"
+		ADJ_DISPLAY_WIDTH="$(echo "scale=1; ${DISPLAY_HRES}*${DISPLAY_SCALE}" | bc | cut -d "." -f1)"
+		NEXT_DISPLAY_START="$(echo "scale=1; ${NEXT_DISPLAY_START}+${ADJ_DISPLAY_WIDTH}" | bc | cut -d "." -f1)"
+	fi
+done < <(echo "$CONNECTED_MONITORS")
+
+### If HiDPI was found, see if user wants to run arandr to change it
+if [[ -s $AFTER_SCALE_INFO ]]; then
+	# Show autoscale results and options, countdown to restore
+	PERCERNT_COUNT=0
+	while true; do
+		sleep 0.2; PERCERNT_COUNT=$((++PERCERNT_COUNT))
+		echo $PERCERNT_COUNT
+		echo $"#Restoring original scale in 20 seconds"
+	done | yad --image="video-display" --borders=20 --progress --text-align=center \
+	--center --title=$"HiDPI Display" --text=$"<big>HiDPI display detected</big>\n\
+<b>Your screen scale has been adjusted automatically to:</b>\n\
+$YAD_DISPLAY_MESSAGE\n\n\
+<small>Note: This script can be disabled from ~/.desktop-session/startup</small>\n" \
+	--button=$"Save!gtk-ok!Save display settings to .screenlayout/default.sh":1 \
+	--button=$"Select different!gtk-fullscreen!Use arandr to Change and save settings manually to default.sh":2 \
+	--button=$"Cancel!gtk-cancel!Restore to previous display settings":0 \
+	--auto-close
+	exitcode=$?
+	# Save changes and restart session
+	if [ $exitcode -eq 1 ]; then
+		# Save the script as the default
+		cp -f $XRANDR_CMD $HOME/.screenlayout/default.sh && chmod +x $HOME/.screenlayout/default.sh
+		# scale was changed, need to restart desktop	
+		desktop-session-exit -R
+	# Save copy of changes and launch arandr
+	elif [ $exitcode -eq 2 ]; then
+		# Change - they want to change it and save to default.sh themselves, but save the script for them just in case
+		cp $XRANDR_CMD $HOME/.screenlayout/default-notused.sh && chmod +x $HOME/.screenlayout/default-notused.sh
+		cd $HOME/.screenlayout
+		arandr &
+	# Restore resolution (do NOT save any changes, do NOT restart session)
+	else
+		while read -r line; do
+			DISPLAY_ID="$(echo $line | cut -d" " -f1)"
+			DISPLAY_RES="$(echo $line | cut -d" " -f2)"
+			DISPLAY_POS="$(echo $line | cut -d" " -f3)"
+			xrandr --output $DISPLAY_ID --mode $DISPLAY_RES --pos $DISPLAY_POS --scale "1x1"
+		done < "$BEFORE_SCALE_INFO"
+	fi
+else
+	# Create empty $HOME/.screenlayout/default.sh if it doesn't exist
+	if [ ! -f "$HOME/.screenlayout/default.sh" ]; then echo "" > "$HOME/.screenlayout/default.sh" && chmod +x "$HOME/.screenlayout/default.sh"; fi
+fi

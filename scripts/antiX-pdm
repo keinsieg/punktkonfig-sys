@@ -1,0 +1,376 @@
+#!/bin/bash
+#Script to configure pointing devices (mouse or touchpads, etc), using xinput and libinput
+#Requirements: xinput, yad, sed, grep
+#By PPC, full GPL license, for use with antiX Linux, please keep this attribution. 10/03/2024
+#version 6 - testing version for checking ig "Disable touchpad" can be managed from the GUI
+# 30.3.2024 completed translation setup, new gettext style
+
+TEXTDOMAINDIR=/usr/share/locale
+TEXTDOMAIN=antix-pointing-device-manager
+export TEXTDOMAIN TEXTDOMAINDIR
+source gettext.sh
+
+#Strings of text, for easy eddition and localization:
+
+# Window title
+window_title="$(eval_gettext 'antiX pointing device manager')"
+# Select device text
+select_device_text="$(eval_gettext 'Pointing Device to be configured:')"
+# Status text
+On="$(eval_gettext 'On')"
+# Status text
+Off="$(eval_gettext 'Off')"
+# Dependency warning text
+xinput_dependency_warning_text="$(eval_gettext 'In order to work, this script requires that the dependency xinput is installed.')"
+# Install button engraving
+install_button="$(eval_gettext 'Install it')"
+# Install error text
+xinput_install_error="$(eval_gettext 'For some reason xinput was not installed')"
+# Main screen text
+main_screen_text="$(eval_gettext 'You are managing pointing device')"
+# Exit warning text
+exit_warning_text="$(eval_gettext 'You can close this window or press the ESC key to quit without changing anything')"
+# Device status text
+device_status_text="$(eval_gettext 'Device status')"
+# Reverse scroll text
+reverse_scroll_text="$(eval_gettext 'Reverse Scroll')"
+# Left handed buttons text
+left_handed_buttons="$(eval_gettext 'Left handed buttons')"
+# Accelleration text
+acceleration_text="$(eval_gettext 'Acceleration (default is 0)')"
+# Cursor theme text
+theme_text="$(eval_gettext 'Change Cursor Theme')"
+# Theme tooltip text
+theme_tooltip="$(eval_gettext 'This opens Lxappearance. You can then select the mouse cursor you want in the ‘Mouse Cursor’ tab')"
+# Check box text
+check_box_text="$(eval_gettext 'Load mouse/touchpad settings every time the system restarts')"
+# Apply button engraving
+apply_button="$(eval_gettext 'Apply and exit')"
+# Speed text
+speed_text="$(eval_gettext 'Speed (default is 1)')"
+# Double click speed text
+double_click_speed_text="$(eval_gettext 'Slow double click \n (Changes to this setting require restarting the session)')"
+# Middle emulation text
+middle_emulation_text="$(eval_gettext 'Right + Left click emulate Middle click')"
+# Horizontal scroll text
+horizontal_scroll="$(eval_gettext 'Horizontal Scroll Enabled')"
+# Disable touchpad while typing text
+disable_touchpad_while_typing_text="$(eval_gettext 'Disable while typing (only applies to touchpads)')"
+# Apply button tooltip
+apply_tooltip="$(eval_gettext 'This button applies the settings as selected on this window and closes it. Please note that any change in Double Click speed requires you to restart your session to produce effects')"
+
+
+# helper functions add_startup and remove_startup recycled from antiX control centre
+STARTUP_FILE="$HOME/.desktop-session/startup"
+
+# this convenience function adds missing entries to ~/.desktop-session/startup file in case this must be done by an entry.
+# expects mandatory positionals: add_startup "<string_to_be_added>" "<comment_line_to_be_added>"
+# in case the line exists, it will silently do nothing, in case the line exists but is commented out the sharp sign preceding the line will be removed.
+# Additional third ad libitum positional: "<search_string>" in case the command string feed in first positional includes variable parts. Accepts regex, syntax must match sed and grep regex both.
+add_startup() {    # originally a function, but not accessible from within entries, even after exporting it; temp script files as workaround.
+    if [ -z "$3" ]; then teststring="$1"; else teststring="$3"; fi # workaround for variable arguments behind a fixed command string
+    if ! grep ^[[:space:]]*"${teststring}" "$STARTUP_FILE" >/dev/null; then
+		# We don't care for hard blocked entries for now, this might be a future feature.
+        if grep ^[[:space:]]*[#][[:space:]]*"${teststring}"[[:space:]]*[#]*[[:space:]]* "$STARTUP_FILE" >/dev/null; then
+            teststring=${teststring/&/\\\&} # prepare strings for sed
+            replacement=${1/&/\\\&}
+            # remove sharp sign to uncomment, only on a single occurence
+            sed -i "0,/${teststring//\//\\/}/{s/^[[:space:]]*#[[:space:]]*${teststring//\//\\/}.*$/${replacement//\//\\/}/}" "$STARTUP_FILE"
+        else
+            # append entry
+            echo -e "\n$2\n$1" >> "$STARTUP_FILE"
+        fi
+    fi
+#add_startup
+}
+
+disable_startup() {
+    if grep ^[[:space:]]*"${1}" "$STARTUP_FILE" >/dev/null; then
+	# We don't care for duplicate disabled entries for now, these must have been introduced by the user himself. He might have had a reason for creating these.
+            sed -i "s/^[[:space:]]*\(${1//\//\\/}.*\)$/# \1/" "$STARTUP_FILE"
+	# We don't care for duplicates for now, these must have been introduced by the user himself. He might have had a reason for creating these.
+    fi
+#disable_startup
+}
+
+############################################## THE SCRIPT ITSELF:######################################################
+
+###Test for dependecies:
+#check for dependencies: yad
+if ! [ -x "$(command -v yad)" ]; then
+ x-terminal-emulator -e whiptail --title "$window_title" --msgbox "You need to have yad installed, in order to use this script." 8 78
+ exit 1
+fi
+
+#check for dependencies: xinput and offer to install it, if it's not installed:
+al_finalos=/tmp/install_check
+	if ! [ -x "$(command -v xinput)" ]; then
+	app="xinput"
+	install_apps=1
+	fi
+			
+	if [[ "$install_apps" -eq 1 ]]; then
+	 yad --window-icon=input-mouse --center --title="$window_title" --text="$xinput_dependency_warning_tex" --button="$install_button":1 --button=" x ":2 
+	 foo=$?
+	 #This next line zeroes the file that is used to flag the end of the install process (in the end of the follwoing if statement, the "; echo 1 > "${al_finalos}" part changes that's file's content, signaling that the process is over and the main script can continue running:
+	 echo 0 > "${al_finalos}"
+	 	if [[ $foo -eq 2 ]]; then exit;	fi
+	 	
+		if [[ $foo -eq 1 ]]; then x-terminal-emulator -e /bin/bash -c "gksu 'apt update' && gksu 'apt install -y xinput'; echo 1 > "${al_finalos}""
+		fi
+	 #wait until install process is finished (this waits until the "sudo apt install" process running in paralel echoes the value 1 to the "${al_finalos}" file:
+finished=$(cat "${al_finalos}")
+until [ $finished -gt 0 ]
+do
+finished=$(cat "${al_finalos}")
+done
+# Restart the script
+exec bash "$0" "$@"
+		fi
+
+#test if install of each one of the dependencies was succefull, if not, exit:
+	if ! [ -x "$(command -v xinput)" ]; then	 yad --window-icon=input-mouse --center --title="$window_title" --text="$xinput_install_error" --button=" x " --image="/usr/share/icons/papirus-antix/48x48/emblems/vcs-conflicting.png"
+	 exit
+	fi
+#### end of dependencies check and install process	
+
+####MAIN SCRIPT:
+#get list of devices
+#Clean temp file:
+echo "" > /tmp/check-ds-mouse
+#Create full list of possible poiting devices:
+xinput list |grep -v "eyboard"| grep -v "Virtual core"  > /tmp/xinput_full_list
+#Create just the list of ALL names of posible poiting devices:
+xinput list --name-only |grep -v "eyboard" | grep -v "Virtual core" | grep -v "KEYBOARD"> /tmp/xinput_names_list
+#Create list of names of devices (i.e. lines from /tmp/xinput_names_list) that are present in the file /tmp/xinput_full_list, to display just them on the selection menu:
+cat /tmp/xinput_names_list | while read line 
+do
+ cat /tmp/xinput_full_list | grep "$line" && echo "$line" >> /tmp/check-ds-mouse
+done
+#remove empty lines:
+sed -i '/^$/d' /tmp/check-ds-mouse
+
+#Check if there's only one option:
+if [ $(wc -l < /tmp/check-ds-mouse) -eq 1 ]; then
+    #There is only one choice, configuring it
+    id=$(cat /tmp/check-ds-mouse)
+else
+    #There are several choices available, displaying interface, so user can make a selection
+
+	#turn list of devices info fields to be displayed in yad
+	selected_option=""
+
+    # Read the file line by line and construct a list of options
+	options=""
+	while IFS= read -r line
+	do
+		options+="$line"$'! '
+	done < /tmp/check-ds-mouse
+	
+	#remove trailing character !
+    options="${options%!*}"
+
+	# Use yad to create a dropdown box with the options, so user can select the device to be configured
+	selected_option=$(yad --window-icon=input-mouse --center --width=370 --button="gtk-ok:0" --title="$window_title" --form --field="${select_device_text}:CB" "$options")
+
+	# Check if the user selected an option
+	if [ "$selected_option" != "" ]; then
+		id=$(echo $selected_option)
+        #remove trailing character	
+		id=${id::-1}
+		echo "You selected the device with the called:${id}..."
+        echo ${id} > /tmp/ds-mouse_device_id
+	 else
+		echo "No option was selected."
+		exit
+	fi	
+
+	id=$(cat /tmp/ds-mouse_device_id)
+	
+fi #closing the if statement that checks if there one or more choices
+
+#Status of selected device:
+	status_on_off=$(xinput list-props "$id" |grep "Device Enabled"|cut -d ":" -f2| tr -dc '0-9')
+	if [ "$status_on_off" -eq 1 ]; then default_status_choices="$On!$Off"; fi
+	if [ "$status_on_off" -eq 0 ]; then default_status_choices="$Off!$On"; fi
+	
+	natural_scroll_status=$(xinput list-props "$id" |grep "libinput Natural Scrolling Enabled ("|cut -d ":" -f2| tr -dc '0-9')
+	if [ "$natural_scroll_status" -eq 1 ]; then default_scroll_choices="$On!$Off"; fi
+	if [ "$natural_scroll_status" -eq 0 ]; then default_scroll_choices="$Off!$On"; fi
+	
+	left_hand_button_status=$(xinput list-props "$id" |grep "libinput Left Handed Enabled ("|cut -d ":" -f2| tr -dc '0-9')
+	if [ "$left_hand_button_status" -eq 1 ]; then default_left_choices="$On!$Off"; fi
+	if [ "$left_hand_button_status" -eq 0 ]; then default_left_choices="$Off!$On"; fi
+	
+	current_acceleration=$(xinput list-props "$id" |grep "libinput Accel Speed ("|cut -d ":" -f2 | awk '{print $NF}')
+	current_acceleration="${current_acceleration::-5}"
+	
+	current_speed=$(xinput list-props "$id" |grep "Coordinate Transformation Matrix"|cut -d ":" -f2|cut -d " " -f1| awk '{print $NF}'| awk '{print substr($0, 1, length($0)-6)}')
+
+    if grep -q "^gtk-double-click-time" "$HOME/.gtkrc-2.0.mine"; then
+	   #echo The file contains a line starting with 'gtk-double-click-time'
+	   double_click_speed="$On!$Off"
+		else
+		#echo The file does not contain a line starting with 'gtk-double-click-time'
+		double_click_speed="$Off!$On"
+	fi
+
+	middle_emulation=$(xinput list-props "$id" |grep "libinput Middle Emulation Enabled ("|cut -d ":" -f2|cut -d " " -f1| awk '{print $NF}')
+	if [ "$middle_emulation" -eq 1 ]; then default_middle_emulation_choices="$On!$Off"; fi
+	if [ "$middle_emulation" -eq 0 ]; then default_middle_emulation_choices="$Off!$On"; fi
+	
+	horizontal_scroll_status=$(xinput list-props "$id" |grep "libinput Horizontal Scroll Enabled ("|cut -d ":" -f2|cut -d " " -f1| awk '{print $NF}')
+	if [ "$horizontal_scroll_status" -eq 1 ]; then default_horizontal_scroll_choices="$On!$Off"; fi
+	if [ "$horizontal_scroll_status" -eq 0 ]; then default_horizontal_scroll_choices="$Off!$On"; fi
+	
+	auto_disable_touchpad_status=$(xinput list-props "$id" |grep "libinput Disable While Typing Enabled ("|cut -d ":" -f2|cut -d " " -f1| awk '{print $NF}')
+	if [ "$auto_disable_touchpad_status" -eq 1 ]; then default_auto_disable_touchpad_choices="$On!$Off"; fi
+	if [ "$auto_disable_touchpad_status" -eq 0 ]; then default_auto_disable_touchpad_choices="$Off!$On"; fi
+
+#Main GUI to select the selected device's configuration:	
+yad --center --window-icon=input-mouse --borders=10 --title="$window_title" --text=" $main_screen_text <b> ${id} </b>\n (${exit_warning_text}) \n" --form --field="${device_status_text}:":CB "$default_status_choices" --field="${reverse_scroll_text}:":CB "$default_scroll_choices" --field="${left_handed_buttons}:":CB "$default_left_choices" --field="${acceleration_text}: :NUM" $current_acceleration\!0..1\!0.1\!1  --field="${speed_text}: :NUM" $current_speed\!0.01..10\!0.01\!2  --field="${double_click_speed_text}:":CB "$double_click_speed" --field="${middle_emulation_text}:":CB "$default_middle_emulation_choices" --field="${horizontal_scroll}:":CB "$default_horizontal_scroll_choices" --field="${disable_touchpad_while_typing_text}:":CB "$default_auto_disable_touchpad_choices" --field="${theme_text}!!${theme_tooltip}:FBTN" "bash -c lxappearance"  --field="${check_box_text}:CHK" --form  --button="$apply_button!gtk-ok!$apply_tooltip" > /tmp/ds-mouse-choices
+
+#Get values from user's choices
+enabled_status=$(cat /tmp/ds-mouse-choices |cut -d "|" -f1)
+reverse_status=$(cat /tmp/ds-mouse-choices |cut -d "|" -f2)
+lefthand_status=$(cat /tmp/ds-mouse-choices |cut -d "|" -f3)
+selected_acceleration=$(cat /tmp/ds-mouse-choices |cut -d "|" -f4)
+selected_speed=$(cat /tmp/ds-mouse-choices |cut -d "|" -f5)
+selected_double_click_speed=$(cat /tmp/ds-mouse-choices |cut -d "|" -f6)
+selected_middle_emulation=$(cat /tmp/ds-mouse-choices |cut -d "|" -f7)
+selected_horizontal_scroll=$(cat /tmp/ds-mouse-choices |cut -d "|" -f8)
+selected_auto_disable_tp=$(cat /tmp/ds-mouse-choices |cut -d "|" -f9)
+stick_status=$(cat /tmp/ds-mouse-choices |cut -d "|" -f11)  ### -f number is always +2 than the previous -f in the line above
+
+#Create temporary file to store current device settings and make sure it's empty:
+tempfile=$HOME/.temporary_current_poiting_device_config
+touch $tempfile
+echo "" > $tempfile
+
+#Apply user selection about the device status:
+if [ "$enabled_status" == "$On" ]; then xinput set-prop "$id" "Device Enabled" "1"
+   echo xinput set-prop \"$id\" \"Device Enabled\" \"1\"  >> $tempfile
+fi
+if [ "$enabled_status" == "$Off" ]; then xinput set-prop "$id" "Device Enabled" "0"
+   echo xinput set-prop \"$id\" \"Device Enabled\" \"0\"  >> $tempfile
+fi
+xinput list-props "$id" |grep "Device Enabled"
+
+#Apply user selection about reverse/natural scrolling:
+if [ "$reverse_status" == "$On" ]; then xinput set-prop "$id" "libinput Natural Scrolling Enabled" "1"
+   echo xinput set-prop \"$id\" \"libinput Natural Scrolling Enabled\" \"1\"  >> $tempfile
+fi
+if [ "$reverse_status" == "$Off" ]; then xinput set-prop "$id" "libinput Natural Scrolling Enabled" "0"
+   echo xinput set-prop \"$id\" \"libinput Natural Scrolling Enabled\" \"0\"  >> $tempfile
+fi
+xinput list-props "$id" |grep "libinput Natural Scrolling Enabled ("
+
+#Apply user selection about left handed buttons:
+if [ "$lefthand_status" == "$On" ]; then xinput set-prop "$id" "libinput Left Handed Enabled" "1"
+   echo  xinput set-prop \"$id\" \"libinput Left Handed Enabled\" \"1\" >> $tempfile
+fi
+if [ "$lefthand_status" == "$Off" ]; then xinput set-prop "$id" "libinput Left Handed Enabled" "0"
+   echo  xinput set-prop \"$id\" \"libinput Left Handed Enabled\" \"0\" >> $tempfile
+fi
+xinput list-props "$id" |grep "libinput Left Handed Enabled ("
+
+#Apply user selection about the device acceleration:
+#convert "," to "."
+selected_acceleration=$(echo "$selected_acceleration" | sed 's/\,/\./g')
+xinput set-prop "$id" "libinput Accel Speed" "$selected_acceleration"
+echo xinput set-prop \"$id\" \"libinput Accel Speed\" \"$selected_acceleration\"   >> $tempfile
+xinput list-props "$id" |grep "libinput Accel Speed ("
+
+#Apply user selection about the device speed:
+#convert "," to "."
+selected_speed=$(echo "$selected_speed" | sed 's/\,/\./g')
+speed="$selected_speed"
+xinput set-prop "$id"  "Coordinate Transformation Matrix"  $speed 0 0 0 $speed 0 0 0 1
+echo xinput set-prop \"$id\"  \"Coordinate Transformation Matrix\"  $speed 0 0 0 $speed 0 0 0 1   >> $tempfile
+xinput list-props "$id" |grep "Coordinate Transformation Matrix"
+
+clear
+echo Just for your information, EVEN IF YOU CHANGED NOTHING, the current pointing device config is:
+cat $tempfile
+
+#Apply user selection about double click speed, using 2 functions adapted to edit the gtk config file and perform the required changes
+GTK_FILE="$HOME/.gtkrc-2.0.mine"
+
+#Apply user selection about Middle Emulation:
+if [ "$selected_middle_emulation" == "$On" ]; then xinput set-prop "$id" "libinput Middle Emulation Enabled" "1"
+   echo  xinput set-prop \"$id\" \"libinput Middle Emulation Enabled\" \"1\" >> $tempfile
+fi
+if [ "$selected_middle_emulation" == "$Off" ]; then xinput set-prop "$id" "libinput Middle Emulation Enabled" "0"
+   echo xinput set-prop \"$id\" \"libinput Middle Emulation Enabled\" \"0\" >> $tempfile
+fi
+xinput list-props "$id" |grep "libinput Middle Emulation Enabled ("
+
+#Apply user selection about Horizontal Scroll:
+if [ "$selected_horizontal_scroll" == "$On" ]; then xinput set-prop "$id" "libinput Horizontal Scroll Enabled" "1"
+   echo  xinput set-prop \"$id\" \"libinput Horizontal Scroll Enabled\" \"1\" >> $tempfile
+fi
+if [ "$selected_horizontal_scroll" == "$Off" ]; then xinput set-prop "$id" "libinput Horizontal Scroll Enabled" "0"
+   echo xinput set-prop \"$id\" \"libinput Horizontal Scroll Enabled\" \"0\" >> $tempfile
+fi
+xinput list-props "$id" |grep "libinput Horizontal Scroll Enabled ("
+
+#Apply user selection about Disabling touchpad while typing:
+if [ "$selected_auto_disable_tp" == "$On" ]; then xinput set-prop "$id" "libinput Disable While Typing Enabled" "1"
+   echo  xinput set-prop \"$id\" \"libinput Disable While Typing Enabled\" \"1\" >> $tempfile
+fi
+if [ "$selected_auto_disable_tp" == "$Off" ]; then xinput set-prop "$id" "libinput Disable While Typing Enabled" "0"
+   echo  xinput set-prop \"$id\" \"libinput Disable While Typing Enabled\" \"0\" >> $tempfile
+fi
+xinput list-props "$id" |grep "libinput Disable While Typing Enabled ("
+
+
+add_gtk() { 
+    if [ -z "$3" ]; then teststring="$1"; else teststring="$3"; fi # workaround for variable arguments behind a fixed command string
+    if ! grep ^[[:space:]]*"${teststring}" "$GTK_FILE" >/dev/null; then
+		# We don't care for hard blocked entries for now, this might be a future feature.
+        if grep ^[[:space:]]*[#][[:space:]]*"${teststring}"[[:space:]]*[#]*[[:space:]]* "$GTK_FILE" >/dev/null; then
+            teststring=${teststring/&/\\\&} # prepare strings for sed
+            replacement=${1/&/\\\&}
+            # remove sharp sign to uncomment, only on a single occurence
+            sed -i "0,/${teststring//\//\\/}/{s/^[[:space:]]*#[[:space:]]*${teststring//\//\\/}.*$/${replacement//\//\\/}/}" "$GTK_FILE"
+        else
+            # append entry
+            echo -e "\n$2\n$1" >> "$GTK_FILE"
+        fi
+    fi
+}
+
+disable_gtk() {
+    if grep ^[[:space:]]*"${1}" "$GTK_FILE" >/dev/null; then
+	# We don't care for duplicate disabled entries for now, these must have been introduced by the user himself. He might have had a reason for creating these.
+            sed -i "s/^[[:space:]]*\(${1//\//\\/}.*\)$/# \1/" "$GTK_FILE"
+	# We don't care for duplicates for now, these must have been introduced by the user himself. He might have had a reason for creating these.
+    fi
+}
+
+export -f   add_gtk  disable_gtk
+
+if [ "$selected_double_click_speed" == "$Off" ]; then
+disable_gtk 'gtk-double-click-time = '
+else 
+add_gtk 'gtk-double-click-time = 800'
+fi
+
+#Process if selections should be saved to work across sessions/reboots:
+if [ "$stick_status" == "TRUE" ]; then 
+	configfile=$HOME/.current_pointing_device_config
+	#Make sure the config file exists and that it's executable
+	touch $configfile
+	chmod +x "$configfile"
+	#Clear all settings related to the selected device, exiting in the config file
+	sed -i "/$id/d" "$configfile"
+	cat $tempfile >> $configfile
+	#remove empty lines from the config file:
+	sed -i '/^$/d' "$configfile"
+	
+	add_startup '$HOME/.current_pointing_device_config &' '## Uncomment to load device configurations set in antix poting device manager'
+    echo antiX will always load this configuration: $stick_status
+ else
+    disable_startup '$HOME/.current_pointing_device_config &'
+
+fi

@@ -1,0 +1,34 @@
+#!/bin/sh
+# ## The GnuPG Wrapper for the Rox Desktop. ##
+# TODO: Delete old files. Incorporate into yad.
+
+# Change this to your email address used by your private key.
+#GPG_ID=foo@bar.com
+
+# Change this to "gpg" if you are so inclined.
+EXTENSION="gpg"
+
+#### Probably won't need to change these....
+FILENAME=`basename $1` 
+WITHOUT_GPG=`basename $1 .gpg`
+WITHOUT_PGP=`basename $1 .pgp`
+
+# The script
+if [ -n "$1" ]; then
+	cd `dirname $1`
+fi
+
+if [ $FILENAME != $WITHOUT_GPG ] ||
+   [ $FILENAME != $WITHOUT_PGP ]; then
+	# If it's got the right extension, decrypt it.
+	DECRYPTED_OUT=`basename $@ | sed "s/\.[^.]*$//"`
+	exec gpg -o $DECRYPTED_OUT --decrypt $@
+else 
+	# No recognized extension - tar then encrypt if GPG_ID exists
+	GPG_OUT=${FILENAME}.${EXTENSION}
+        if [ $GPG_ID ]; then
+	exec gpg  -a -r $GPG_ID -o $GPG_OUT --encrypt $@
+        else
+        exec gpg -o $GPG_OUT --symmetric $@
+        fi
+fi

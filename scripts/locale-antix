@@ -1,0 +1,696 @@
+#!/bin/bash
+
+############ CONFIGURE LANGUAGE AND LOCALE ############
+#### Simple graphical interface to manage locales  ####
+#### (UTF-8) in Debian based systems. Add, remove, ####
+####  change and configure locales a bit easier.   ####
+####   # Initially developed for antiX linux #     ####
+#######################################################
+
+### Localization ###
+TEXTDOMAINDIR=/usr/share/locale
+TEXTDOMAIN=locale-antix
+
+if [[ ! -e /usr/bin/yad ]]; then
+    echo $"yad is NOT installed. Cannot start the script."
+    exit 1
+fi
+
+# OS Options
+SYSTEM_KEYBOARD_CMD="gksu system-keyboard-qt"
+TIME_AND_DATE_CMD="set_time-and_date.sh"
+
+# DESKTOP FILE ENTRIES:
+USER_PROGRAM_NAME=$"User Language"
+SYSTEM_PROGRAM_NAME=$"System Language"
+PROGRAM_DESCRIPTION=$"Change Language and other locale options"
+
+# PATHS
+PATH_TO_LOCALES="/usr/share/i18n/locales"
+LOCALES_GEN_LIST="/etc/locale.gen"
+SYSTEM_LOCALE="/etc/default/locale"
+USER_LOCALE="$HOME/.config/locale"
+LOCALE_LIBRARY="/usr/share/locale-antix/locale.lib"
+export LOCALE_LIBRARY
+
+LOCALE_TEMP=$(mktemp -p /dev/shm)
+STATE_TEMP=$(mktemp -p /dev/shm)
+
+if [[ $EUID -eq 0 ]]; then
+    echo $"RUNNING AS ROOT"
+    LOCALE_FILE="$SYSTEM_LOCALE"
+    PROGRAM_NAME="$SYSTEM_PROGRAM_NAME"
+else
+    echo $"RUNNING PROGRAM AS USER"
+    LOCALE_FILE="$USER_LOCALE"
+    PROGRAM_NAME="$USER_PROGRAM_NAME"
+fi
+
+export LOCALE_FILE
+export PROGRAM_NAME
+export LOCALE_TEMP
+export STATE_TEMP
+
+main(){
+    local ARGS="$@"
+    
+    local PROGRAM_STATE
+    PROGRAM_STATE="$(change_state "GENERAL")"
+    
+    # First run (may need to change SYSTEM_LOCALE to USER_LOCALE
+    if [ ! -f "$LOCALE_FILE" ] || [ $(grep -c -e "^LANG\|^LC_" "$LOCALE_FILE") -eq 0 ]; then
+        cat "$SYSTEM_LOCALE" | grep -v "^$\|^#" > "$LOCALE_TEMP"
+    else
+        cat "$LOCALE_FILE" | grep -v "^$\|^#" > "$LOCALE_TEMP"
+    fi
+    
+    # If LANG is missing from system's locale, create a new one with C and restart program
+    if [ -z "$LANG" ] || [ $(check_locale_code "${LANG%.*}" | awk '{print $2}') != "LOADED" ]; then
+        sed -i '/LANG=/d' "$LOCALE_TEMP"
+        echo "LANG=C" >>"$LOCALE_TEMP"
+        PROGRAM_STATE="$(change_state "RESTART")"
+    fi
+    # Warning for translation-info
+    translation-info.sh
+    
+    while [ "$PROGRAM_STATE" != "EXIT" ]; do
+        launch_state "$PROGRAM_STATE"
+        PROGRAM_STATE="$(cat "$STATE_TEMP")"
+        cat "$STATE_TEMP"
+    done
+}
+
+change_state(){
+    local NEW_STATE="${1}"
+    echo "$NEW_STATE" | tee "$STATE_TEMP"
+}
+export -f change_state
+
+launch_state(){
+    local CURRENT_STATE="${1}"
+    
+    case $CURRENT_STATE in
+      GENERAL)        main_dialog
+                      ;;
+      MANAGE_LOCALES) manage_locales
+                      ;;
+      REMOVE_LOCALES) manage_locales "remove"
+                      ;;
+      FORMAT_LOCALES) format_locales
+                      ;;
+      RESTART)        reload_program; exit 0
+                      ;;
+      EXIT)           exit 0
+                      ;;
+        *)            exit 0;;
+    esac
+}
+
+main_dialog(){
+    local CURRENT_LANG CURRENT_FORMATS CURRENT_LANGUAGE LC_XXX_L
+    local EXIT_CODE
+    CURRENT_LANG="$(get_language_region LANG)"
+    CURRENT_LANGUAGE="$(get_language_region LANGUAGE)"
+    
+    # GUI STRINGS
+    LANGUAGE_TEXT=$"Language"
+    LANGUAGE_DESC=$"Change the language for applications"
+    FORMATS_TEXT=$"Formats"
+    FORMATS_DESC=$"Set regional formats and Fallback language"
+    MANAGE_LANGUAGE_TEXT=$"Manage installed Languages"
+    MANAGE_LANGUAGE_TEXT2=$"(needs administrative powers)"
+    CUSTOM_FORMATS_TEXT=$"Advanced region options"
+    KEYBOARD_TEXT=$"Keyboard"
+    TIMEZONE_TEXT=$"Timezone"
+    LOCALIZE_PACKAGES_TEXT=$"Localize Programs"
+    TRANSLATE_MENUS_TEXT=$"Translate menus"
+    # LOCALE related options (external apps)
+    SYSTEM_KEYBOARD="/etc/default/keyboard" # Thinking configuring layout
+    SYSTEM_TIMEZONE="/etc/timezone" # May use for setting date, time and timezone
+    # source keyboard variables
+    [ -r "$SYSTEM_KEYBOARD" ] && . "$SYSTEM_KEYBOARD"
+    # timezone and date-time
+    CURRENT_DATE_TIME="$(date +"$(locale d_fmt) $(locale t_fmt)")"
+    CURRENT_TIMEZONE="$(cat $SYSTEM_TIMEZONE)"
+    
+    CHANGE_LANGUAGE_CMD='bash -c "select_locale LANGUAGE; kill -USR1 $YAD_PID"'
+    CHANGE_LANG_CMD='bash -c "select_locale LANG; kill -USR1 $YAD_PID"'
+    MANAGE_LOCALES_CMD='bash -c "change_state MANAGE_LOCALES; kill -USR1 $YAD_PID"'
+    FORMAT_LOCALES_CMD='bash -c "change_state FORMAT_LOCALES; kill -USR1 $YAD_PID"'
+    
+    # Local USER cannot manage locales
+    if [ $EUID -ne 0 ]; then
+        MANAGE_LOCALES_CMD="@disabled@"
+        MANAGE_LANGUAGE_TEXT="$MANAGE_LANGUAGE_TEXT"$'\n'"$MANAGE_LANGUAGE_TEXT2"
+    fi
+    
+    yad --title="$PROGRAM_NAME" --name="locale-antix" --class="dialog" \
+    --window-icon=preferences-desktop-locale \
+    --borders=10 --form --separator="" --columns=3 --center --align=center \
+    --field="${LANGUAGE_TEXT}":LBL '' \
+    --field="${FORMATS_TEXT}":LBL '' \
+    --field=" ":LBL '' \
+    --field="${KEYBOARD_TEXT}":LBL '' \
+    --field="${TIMEZONE_TEXT}":LBL '' \
+    --field=" ":LBL '' \
+    --field="$CURRENT_LANGUAGE"!"config-language"!"$LANGUAGE_DESC":FBTN "$CHANGE_LANGUAGE_CMD" \
+    --field="$CURRENT_LANG"!"format-text-larger"!"$FORMATS_DESC":FBTN "$CHANGE_LANG_CMD" \
+    --field=" ":LBL '' \
+    --field="$XKBLAYOUT":FBTN "$SYSTEM_KEYBOARD_CMD" \
+    --field="$CURRENT_TIMEZONE":FBTN "$TIME_AND_DATE_CMD" \
+    --field="$CURRENT_DATE_TIME":LBL '' \
+    --field="!gtk-add!""$MANAGE_LANGUAGE_TEXT":FBTN "$MANAGE_LOCALES_CMD" \
+    --field="!view-list-text!""$CUSTOM_FORMATS_TEXT":FBTN "$FORMAT_LOCALES_CMD" \
+    --field=" ":LBL '' --field=" ":LBL '' --field=" ":LBL '' \
+    --button="$LOCALIZE_PACKAGES_TEXT":2 --button="$TRANSLATE_MENUS_TEXT":3
+    EXIT_CODE=$?
+    
+    
+    # Translate Menus
+    if [ $EXIT_CODE -eq 3 ]; then
+        /usr/local/lib/desktop-menu/translate-menus-antix
+    # Download and install packages for better language experience
+    elif [ $EXIT_CODE -eq 2 ]; then
+        install_locale_pckgs
+    elif [ $EXIT_CODE -ne 0 ]; then
+        change_state "EXIT"
+    fi
+}
+
+select_locale(){
+    local LC_CATEGORY LOADED_LOCALES LOCALE_SELECTION CURRENT_LANGUAGE_REGION
+    local LOCALE_LIST LANGUAGE_LIST CURRENT_LOCALE
+    local EXIT_CODE
+    LC_CATEGORY="${1}"
+    LANGUAGE_INFO_TEXT=$"Current localization for $LC_CATEGORY:"
+    
+    #~ if [ "$LC_CATEGORY" = "LANGUAGE" ]; then
+        #~ CURRENT_LOCALE="$(get_locale_code LANGUAGE)"
+        #~ CURRENT_LOCALE="${CURRENT_LOCALE:-$(get_locale_code LANG)}"
+    #~ else
+        CURRENT_LOCALE="$(get_locale_code "$LC_CATEGORY")"
+    #~ fi
+    
+    LOADED_LOCALES="$(grep -v "#" /etc/locale.gen | grep -E 'utf8|UTF-8' | awk '{print $1}' | cut -d. -f1 | sort -u)"
+    
+    CURRENT_LANGUAGE_REGION="$(locale_info "$CURRENT_LOCALE" | cut -d" " -f3-)"
+    LOCALE_LIST="$(locale_info "$LOADED_LOCALES")"
+    LANGUAGE_LIST="$(echo "$LOCALE_LIST" | sed 's/ - /\n           \n/')"
+
+    LOCALE_SELECTION="$(yad --title="$PROGRAM_NAME" --name="locale-antix" --class="dialog" \
+    --image=preferences-desktop-locale --image-on-top --center --height=500 \
+    --window-icon=preferences-desktop-locale --borders=10 --width=400 \
+    --text="${LANGUAGE_INFO_TEXT}\n<b>${CURRENT_LANGUAGE_REGION}</b>" \
+    --text-align=center --list --no-headers --column="language code" \
+    --column="space" --column="Language" < <(echo "$LANGUAGE_LIST") \
+    --print-column=1 --separator="" --search-column=3)"
+    EXIT_CODE=$?
+
+    if [ $EXIT_CODE -eq 0 ] && [ ! -z "$LOCALE_SELECTION" ]; then
+        set_locale "$LC_CATEGORY" "$LOCALE_SELECTION"
+        if [ "$LC_CATEGORY" = "LANGUAGE" ] || [ "$LC_CATEGORY" = "LANG" ]; then
+            PROGRAM_STATE="$(change_state "RESTART")"
+        fi
+    fi
+}
+export -f select_locale
+
+manage_locales(){
+    local SELECTED_OPTION CURRENT_LOCALE ALL_LOCALES LOADED_LOCALES UNLOADED_LOCALES
+    local LOCALE_LIST CURRENT_LANGUAGE YAD_TEXT1 YAD_TEXT2 LOCALES_SELECTION EXIT_CODE
+    local REMOVE_ALL_CMD
+    
+    SELECTED_OPTION="${1}"
+    CURRENT_LOCALE="$(get_locale_code LANGUAGE)"
+    CURRENT_LOCALE="${CURRENT_LOCALE:-$(get_locale_code LANG)}"
+    
+    ALL_LOCALES="$(grep -E 'utf8|UTF-8' /etc/locale.gen | sed 's/^# /#/' | awk '{print $1}' | cut -d"." -f1 | sort -u)"
+    if [ $(check_locale_code "${LANG%.*}" | awk '{print $2}') = "LOADED" ]; then
+        ALL_LOCALES="$(echo "$ALL_LOCALES" | grep -v -e "${CURRENT_LOCALE}$")"
+    fi
+    
+    LOADED_LOCALES="$(echo "$ALL_LOCALES" | grep -v "^#")"    
+    UNLOADED_LOCALES="$(echo "$ALL_LOCALES" | grep "^#" | sed 's/^#//' )"
+    if [ ! -z "$LOADED_LOCALES" ]; then
+        UNLOADED_LOCALES="$(echo "$UNLOADED_LOCALES" | grep -v -f <(echo "$LOADED_LOCALES" | sed 's/$/$/g'))"
+        LOADED_LOCALES="$(locale_info "$LOADED_LOCALES" | sed 's/$/ - TRUE/g')"
+    fi
+    UNLOADED_LOCALES="$(locale_info "$UNLOADED_LOCALES" | sed 's/$/ - FALSE/g')"
+    
+    LOCALE_LIST="$UNLOADED_LOCALES"
+    if [ ! -z "$LOADED_LOCALES" ]; then
+        LOCALE_LIST="$(echo "$LOCALE_LIST"$'\n'"$LOADED_LOCALES" | sort -u)"
+    fi
+    LOCALE_LIST="$(echo "$LOCALE_LIST" | awk -F' - ' '{print $3 " - " $1 " - " $2}' | sed 's/ - /\n/g')"
+    
+    # If option "Remove All" was selected
+    if [ "$SELECTED_OPTION" = "remove" ]; then 
+        LOCALE_LIST="$(echo "$LOCALE_LIST" | sed 's/^TRUE$/FALSE/g')"
+    fi
+    # If there are no "TRUE" values, then disable the "Remove All" option.
+    REMOVE_ALL_CMD=2
+    REMOVE_ALL_TEXT=$"Remove all"
+    if [ $(echo "$LOCALE_LIST" | grep -cx "TRUE") -eq 0 ]; then
+        REMOVE_ALL_CMD="@disabled@"
+        REMOVE_ALL_TEXT="-"
+    fi
+    
+    CURRENT_LANGUAGE="$(locale_info "$CURRENT_LOCALE" | cut -d" " -f3-)"
+    YAD_TEXT1=$"Select what languages you want to keep"
+    YAD_TEXT2=$"(will not remove: $CURRENT_LANGUAGE)"
+    
+    LOCALES_SELECTION="$(yad --title="$PROGRAM_NAME" --name="locale-antix" \
+    --class="dialog" --image=preferences-desktop-locale --image-on-top \
+    --text="${YAD_TEXT1}\n${YAD_TEXT2}" --text-align=center \
+    --center --window-icon=preferences-desktop-locale --borders=10 \
+    --width=450 --height=500 --list --checklist \
+    --column=$"Keep":CHK --column=$"locale code" \
+    --column=$"Language (Region)" < <(echo "$LOCALE_LIST") \
+    --search-column=3 --print-all --separator="!" \
+    --button="$REMOVE_ALL_TEXT":"$REMOVE_ALL_CMD" \
+    --button=$"Keep selected languages":0)"
+    EXIT_CODE=$?
+    
+    PROGRAM_STATE="$(change_state "GENERAL")"
+    
+    if [ $EXIT_CODE -eq 2 ]; then
+        echo $"Remove all locales"
+        PROGRAM_STATE="$(change_state "REMOVE_LOCALES")"
+        #~ echo "$LC_CATEGORY" "$LOCALE_SELECTION"
+    elif [ $EXIT_CODE -eq 0 ] && [ ! -z "$LOCALES_SELECTION" ]; then
+        echo $"Process locales"
+        regenerate_locales "$LOCALES_SELECTION"
+    fi
+}
+
+format_locales(){
+    local CURRENT_LC_NUMERIC CURRENT_LC_TIME CURRENT_LC_MONETARY CURRENT_LC_MEASUREMENT
+    local CURRENT_LC_COLLATE CURRENT_LC_PAPER CURRENT_LC_ADDRESS CURRENT_LC_TELEPHONE
+    local CURRENT_LC_CTYPE CURRENT_LC_NAME
+    local EXIT_CODE
+    
+    CURRENT_LC_NUMERIC="$(get_language_region LC_NUMERIC)"
+    CURRENT_LC_TIME="$(get_language_region LC_TIME)"
+    CURRENT_LC_MONETARY="$(get_language_region LC_MONETARY)"
+    CURRENT_LC_MEASUREMENT="$(get_language_region LC_MEASUREMENT)"
+    CURRENT_LC_COLLATE="$(get_language_region LC_COLLATE)"
+    CURRENT_LC_PAPER="$(get_language_region LC_PAPER)"
+    CURRENT_LC_ADDRESS="$(get_language_region LC_ADDRESS)"
+    CURRENT_LC_TELEPHONE="$(get_language_region LC_TELEPHONE)"
+    CURRENT_LC_CTYPE="$(get_language_region LC_CTYPE)"
+    CURRENT_LC_NAME="$(get_language_region LC_NAME)"
+    
+    LC_NUMERIC_TEXT=$"Numbers"
+    LC_NUMERIC_DESC=$"Change for LC_NUMERIC formats"
+    LC_NUMERIC_HINT=$"Defines formatting of numeric values which aren't monetary. Affects things such as thousand separator and decimal separator."
+    LC_TIME_TEXT=$"Time and date"
+    LC_TIME_DESC=$"Change for LC_TIME formats"
+    LC_TIME_HINT=$"Defines formatting of dates and times."
+    LC_MONETARY_TEXT=$"Currency"
+    LC_MONETARY_DESC=$"Change for LC_MONETARY formats"
+    LC_MONETARY_HINT=$"Defines currency units and formatting of currency-type numeric values."
+    LC_MEASUREMENT_TEXT=$"Measurement Units"
+    LC_MEASUREMENT_DESC=$"Change for LC_MEASUREMENT formats"
+    LC_MEASUREMENT_HINT=$"Default measurement system used within the region."
+    LC_COLLATE_TEXT=$"Collation"
+    LC_COLLATE_DESC=$"Change for LC_COLLATE formats"
+    LC_COLLATE_HINT=$"Define alphabetical ordering (and sorting) of words and other sequences of characters."
+    LC_PAPER_TEXT=$"Paper"
+    LC_PAPER_DESC=$"Change for LC_PAPER formats"
+    LC_PAPER_HINT=$"Defines default paper size used in the region."
+    LC_ADDRESS_TEXT=$"Postal Address"
+    LC_ADDRESS_DESC=$"Change for LC_ADDRESS formats"
+    LC_ADDRESS_HINT=$"Convention used for formatting of street or postal addresses."
+    LC_TELEPHONE_TEXT=$"Telephone"
+    LC_TELEPHONE_DESC=$"Change for LC_TELEPHONE formats"
+    LC_TELEPHONE_HINT=$"Conventions used for representation of telephone numbers"
+    LC_CTYPE_TEXT=$"Character"
+    LC_CTYPE_DESC=$"Change for LC_CTYPE formats"
+    LC_CTYPE_HINT=$"Define the character-handling properties for the system. This determines which characters are seen as alphabetic, numeric, and so on."
+    LC_NAME_TEXT=$"Names of People"
+    LC_NAME_DESC=$"Change for LC_NAME formats"
+    LC_NAME_HINT=$"Formats order, case and initials of First names, Family names and Professions based on Region/Language conventions."
+    
+    LC_NUMERIC_CMD='bash -c "select_locale LC_NUMERIC; kill -USR1 $YAD_PID"'
+    LC_TIME_CMD='bash -c "select_locale LC_TIME; kill -USR1 $YAD_PID"'
+    LC_MONETARY_CMD='bash -c "select_locale LC_MONETARY; kill -USR1 $YAD_PID"'
+    LC_MEASUREMENT_CMD='bash -c "select_locale LC_MEASUREMENT; kill -USR1 $YAD_PID"'
+    LC_COLLATE_CMD='bash -c "select_locale LC_COLLATE; kill -USR1 $YAD_PID"'
+    LC_PAPER_CMD='bash -c "select_locale LC_PAPER; kill -USR1 $YAD_PID"'
+    LC_ADDRESS_CMD='bash -c "select_locale LC_ADDRESS; kill -USR1 $YAD_PID"'
+    LC_TELEPHONE_CMD='bash -c "select_locale LC_TELEPHONE; kill -USR1 $YAD_PID"'
+    LC_CTYPE_CMD='bash -c "select_locale LC_CTYPE; kill -USR1 $YAD_PID"'
+    LC_NAME_CMD='bash -c "select_locale LC_NAME; kill -USR1 $YAD_PID"'
+    
+    yad --title="$PROGRAM_NAME" --name="locale-antix" --class="dialog" \
+    --window-icon=preferences-desktop-locale \
+    --borders=10 --form --separator="" --columns=3 --center --align=right \
+    --field="${LC_NUMERIC_TEXT}":LBL '' \
+    --field="${LC_TIME_TEXT}":LBL '' \
+    --field="${LC_MONETARY_TEXT}":LBL '' \
+    --field="${LC_MEASUREMENT_TEXT}":LBL '' \
+    --field="${LC_COLLATE_TEXT}":LBL '' \
+    --field="${LC_PAPER_TEXT}":LBL '' \
+    --field="${LC_ADDRESS_TEXT}":LBL '' \
+    --field="${LC_TELEPHONE_TEXT}":LBL '' \
+    --field="${LC_CTYPE_TEXT}":LBL '' \
+    --field="${LC_NAME_TEXT}":LBL '' \
+    --field="$CURRENT_LC_NUMERIC"!view-more-horizontal!"$LC_NUMERIC_DESC":FBTN "$LC_NUMERIC_CMD" \
+    --field="$CURRENT_LC_TIME"!view-calendar-week!"$LC_TIME_DESC":FBTN "$LC_TIME_CMD" \
+    --field="$CURRENT_LC_MONETARY"!format-currency!"$LC_MONETARY_DESC":FBTN "$LC_MONETARY_CMD" \
+    --field="$CURRENT_LC_MEASUREMENT"!measure!"$LC_MEASUREMENT_DESC":FBTN "$LC_MEASUREMENT_CMD" \
+    --field="$CURRENT_LC_COLLATE"!view-sort-descending!"$LC_COLLATE_DESC":FBTN "$LC_COLLATE_CMD" \
+    --field="$CURRENT_LC_PAPER"!document-page-setup!"$LC_PAPER_DESC":FBTN "$LC_PAPER_CMD" \
+    --field="$CURRENT_LC_ADDRESS"!postalcode!"$LC_ADDRESS_DESC":FBTN "$LC_ADDRESS_CMD" \
+    --field="$CURRENT_LC_TELEPHONE"!stock_cell-phone!"$LC_TELEPHONE_DESC":FBTN "$LC_TELEPHONE_CMD" \
+    --field="$CURRENT_LC_CTYPE"!format-text-uppercase!"$LC_CTYPE_DESC":FBTN "$LC_CTYPE_CMD" \
+    --field="$CURRENT_LC_NAME"!tag-people!"$LC_NAME_DESC":FBTN "$LC_NAME_CMD" \
+    --field="!stock_dialog-info!""$LC_NUMERIC_HINT":FBTN "@disabled@" \
+    --field="!stock_dialog-info!""$LC_TIME_HINT":FBTN "@disabled@" \
+    --field="!stock_dialog-info!""$LC_MONETARY_HINT":FBTN "@disabled@" \
+    --field="!stock_dialog-info!""$LC_MEASUREMENT_HINT":FBTN "@disabled@" \
+    --field="!stock_dialog-info!""$LC_COLLATE_HINT":FBTN "@disabled@" \
+    --field="!stock_dialog-info!""$LC_PAPER_HINT":FBTN "@disabled@" \
+    --field="!stock_dialog-info!""$LC_ADDRESS_HINT":FBTN "@disabled@" \
+    --field="!stock_dialog-info!""$LC_TELEPHONE_HINT":FBTN "@disabled@" \
+    --field="!stock_dialog-info!""$LC_CTYPE_HINT":FBTN "@disabled@" \
+    --field="!stock_dialog-info!""$LC_NAME_HINT":FBTN "@disabled@" \
+    --no-buttons
+    EXIT_CODE=$?
+    
+    if [ $EXIT_CODE -ne 0 ]; then
+        change_state "GENERAL"
+    fi
+    #Numbers: LC_NUMERIC: Numeric formatting - Defines formatting of numeric values which aren't monetary. Affects things such as thousand separator and decimal separator.
+    #Time: LC_TIME: Date and time formats - Defines formatting of dates and times. 
+    #Currency: LC_MONETARY: Monetary formatting - Defines currency units and formatting of currency-type numeric values.
+    #Measurement Units: LC_MEASUREMENT: Default measurement system used within the region.
+    #Collation: LC_COLLATE: Collation (sort) order - Define alphabetical ordering (and sorting) of strings (sequences of characters).
+    #Paper: LC_PAPER: Default paper size for region - Defines default paper size. 
+    #Postal Address: LC_ADDRESS: Convention used for formatting of street or postal addresses
+    #Telephone: LC_TELEPHONE: Conventions used for representation of telephone numbers
+    #Character: LC_CTYPE: Character classification and case conversion. Define the character-handling properties for the system. This determines which characters are seen as alphabetic, numeric, and so on.
+    #Names of People:LC_NAME: Name formats
+    
+    ### LOCALE SHOW INFO
+    # FIRST_WEEKDAY="$(LC_TIME=$LOCALE_CODE locale day | cut -d";" -f$(LC_TIME=$LOCALE_CODE locale first_weekday))"
+    # WEEK_DAYS="$(LC_TIME=$LOCALE_CODE locale day)"
+    # TIME_LONG="$(LC_TIME=$LOCALE_CODE date +"$(LC_TIME=$LOCALE_CODE locale date_fmt | tr "[a-z]" "[A-Z]" | tr "[D]" "[d]")")"
+    # TIME_SHORT="$(date +"$(LC_TIME=$LOCALE_CODE locale d_fmt) $(locale t_fmt)"
+    # NUMBERS_SHORT="$(LC_NUMERIC=$LOCALE_CODE printf "%'.2f\n" 123456789.10 2>/dev/null)"
+    # CURRENCY_SHORT="$(LC_NUMERIC=$LOCALE_CODE printf "%'.2f\n" 1002.99 2>/dev/null) $(LC_MONETARY=$LOCALE_CODE locale currency_symbol)"
+}
+
+install_locale_pckgs(){
+    local RECOMMENDED_PACKAGES PACKAGE_LIST SEARCH_PATTERN GREP_PATTERN
+    local YADTEXT SELECT_TO_INSTALL EXIT_CODE PACKAGE_TO_INSTALL
+    
+    RECOMMENDED_PACKAGES="$(check-lang-support)"
+    if [ -z "$RECOMMENDED_PACKAGES" ]; then return 1; fi
+    
+    SEARCH_PATTERN="$(echo "$RECOMMENDED_PACKAGES" | sed 's/ /$|^/g' | sed 's/$/$/g' | sed 's/^/^/g')"
+    GREP_PATTERN="$(echo "$RECOMMENDED_PACKAGES" | sed 's/ /\n/g' | sed 's/$/ - /g' | sed 's/^/^/g')"
+    
+    PACKAGE_LIST="$(apt-cache search "$SEARCH_PATTERN" | grep -f <(echo "$GREP_PATTERN") | sed 's/^/TRUE - /g')"
+    PACKAGE_LIST="$(echo "$PACKAGE_LIST" | sed 's/ - /\n/' | sed 's/ - /\n/')"
+    #~ echo "$PACKAGE_LIST"
+    
+    YADTEXT=$"Select the packages you want to install to localize apps to your language"
+    SELECT_TO_INSTALL="$(yad --title="$PROGRAM_NAME" --name="locale-antix" \
+    --class="dialog" --image=synaptic --image-on-top \
+    --text="$YADTEXT" --text-align=center \
+    --center --window-icon=synaptic --borders=10 \
+    --width=650 --height=450 --list --checklist \
+    --column=$"Install":CHK --column=$"Package" \
+    --column=$"Description" < <(echo "$PACKAGE_LIST") \
+    --search-column=3 --print-all --separator="!" \
+    --button=$"Cancel"!gtk-cancel:1 \
+    --button=$"Install"!gtk-apply:0)"
+    EXIT_CODE=$?
+    
+    if [ $EXIT_CODE -eq 0 ] && [ ! -z "$SELECT_TO_INSTALL" ]; then
+        PACKAGE_TO_INSTALL="$(echo "$SELECT_TO_INSTALL" | grep "^TRUE" | cut -d"!" -f2)"
+        if [ ! -z "$PACKAGE_TO_INSTALL" ]; then
+            x-terminal-emulator -T $"Language support" -e /bin/bash -c "sudo apt update && sudo apt install $(echo $PACKAGE_TO_INSTALL)"
+        fi
+    fi
+}
+
+reload_program(){
+    local LOCALE_LOAD LC_VARIABLE
+    
+    . $LOCALE_TEMP
+    if [[ $EUID -ne 0 ]]; then
+        update_xdg_folders
+        #Restart antiX session
+        $(pgrep desktop-session 1>/dev/null) && $(desktop-session-exit --Restart)
+    fi
+    
+    # Inform the user that they need to reboot.
+    yad --center --width=350 --text-align=center \
+    --text=$"Changes will be visible next time you reboot." --margins=10 \
+    --no-buttons --title="$PROGRAM_NAME" --borders=10 \
+    --window-icon=gtk-dialog-info --image="gtk-dialog-info"
+
+    echo "Reloading program"
+    
+    bash -c 'locale-antix &'
+    change_state "EXIT"
+}
+
+update_xdg_folders(){
+    local CURRENT_USER USER_XDG_DIRS XDG_DIRS_TEMP
+    CURRENT_USER="${USER_LOGNAME:-${SUDO_USER:-$USER}}"
+    USER_XDG_DIRS="/home/$CURRENT_USER/.config/user-dirs.dirs"
+    
+    # If the file doesn't exist, don't run this function
+    if [ ! -r "$USER_XDG_DIRS" ]; then return 1; fi
+    
+    XDG_DIRS_TEMP=$(mktemp -p /dev/shm)
+    if [ ! -z "$LANGUAGE" ]; then
+        export LANGUAGE
+    fi
+    xdg-user-dirs-update --force --dummy-output "$XDG_DIRS_TEMP" 1>/dev/null
+    
+    if [ ! $(cmp -s "$USER_XDG_DIRS" "$XDG_DIRS_TEMP")] && [ -s "$XDG_DIRS_TEMP" ]; then
+        local XDG_VAR XDG_ORIG XDG_PROP XDG_CHANGES XDG_TABLE CHANGE_XDG
+        while read -r line; do
+            XDG_VAR="$(echo "$line" | cut -d"=" -f1)"
+            XDG_ORIG="$(echo "$line" | awk -F'"' '{print $2}')"
+            XDG_PROP="$(grep "^${XDG_VAR}=" "$XDG_DIRS_TEMP" | awk -F'"' '{print $2}')"
+            XDG_CHANGES="$XDG_CHANGES"$'\n'"${XDG_VAR} - ${XDG_ORIG} - ${XDG_PROP}"
+        done < <(grep -v "^$\|^#" "$USER_XDG_DIRS")
+        # remove empty lines
+        XDG_CHANGES="$(echo "$XDG_CHANGES" | grep -v "^$")"
+        XDG_TABLE="$(echo "$XDG_CHANGES" | sed 's/ - /\n/g')"
+        
+        YAD_TEXT1="You can also change your user folders to match the language selection."
+        YAD_TEXT2="Warning: scripts that depend on the paths of these folders may no longer work."
+        
+        CHANGE_XDG="$(yad --title="$PROGRAM_NAME" --name="locale-antix" \
+        --class="dialog" --image=gtk-dialog-warning --image-on-top \
+        --text="${YAD_TEXT1}\n<b>${YAD_TEXT2}</b>" --text-align=center \
+        --center --window-icon=preferences-desktop-locale --borders=10 \
+        --width=550 --height=300 --list --no-select --column=$"Variable" \
+        --column=$"Original" --column=$"Proposed change" < <(echo "$XDG_TABLE") \
+        --button=$"Apply"!gtk-apply:0 --button=$"Cancel"!gtk-cancel:1)"
+        EXIT_CODE=$?
+        if [ $EXIT_CODE -eq 0 ]; then
+            while read -r line; do
+                ORIGINAL_PATH="$(echo "$line" | sed 's/ - /!/g' | cut -d'!' -f2)"
+                PROPOSED_PATH="$(echo "$line" | sed 's/ - /!/g' | cut -d'!' -f3)"
+                #~ echo "$line"
+                if [ "$ORIGINAL_PATH" != "$PROPOSED_PATH" ] && [ ! -z "$PROPOSED_PATH" ]; then
+                    ORIGINAL_PATH="$HOME/$(echo "$ORIGINAL_PATH" | cut -d"/" -f2-)"
+                    PROPOSED_PATH="$HOME/$(echo "$PROPOSED_PATH" | cut -d"/" -f2-)"
+                    #~ echo "Moving $ORIGINAL_PATH to $PROPOSED_PATH"
+                    mv "$ORIGINAL_PATH" "$PROPOSED_PATH"
+                fi
+            done < <(echo "$XDG_CHANGES")
+            # Update the user-dirs list
+            xdg-user-dirs-update --force
+        fi
+    fi
+    rm -f "$XDG_DIRS_TEMP"
+}
+
+locale_info(){
+    local LOCALE_LIST INFO_LIST
+    LOCALE_LIST="${1}"
+    if [ ! -z "$LOCALE_LIST" ]; then
+        INFO_LIST="$(cat "$LOCALE_LIBRARY" | grep -f <(echo "$LOCALE_LIST" | sed 's/^/^/' | sed 's/$/ /'))"
+    else
+        INFO_LIST="- - --------------------"
+    fi
+    echo "$INFO_LIST"
+}
+export -f locale_info
+
+get_locale_code(){
+    local LOCALE_CATEGORY LOCALE_CODE
+    LOCALE_CATEGORY="${1}"
+    LOCALE_CODE="$(grep "${LOCALE_CATEGORY}=" "$LOCALE_TEMP" | cut -d"=" -f2- | cut -d"." -f1 | cut -d":" -f1)"
+    
+    echo "$LOCALE_CODE"
+}
+export -f get_locale_code
+
+get_language_region(){
+    local LOCALE_CATEGORY LOCALE_CODE LANGUAGE_REGION
+    LOCALE_CATEGORY="${1}"
+    LOCALE_CODE="$(get_locale_code "$LOCALE_CATEGORY")"
+    LANGUAGE_REGION="$(locale_info "$LOCALE_CODE" | cut -d" " -f3-)"
+    echo "$LANGUAGE_REGION"
+}
+export -f get_language_region
+
+set_locale(){
+    local LC_CATEGORY LC_VALUE LOCALE_CODE ME
+    LC_CATEGORY="${1}"
+    LC_VALUE="${2}"
+    ME=${0##*/}
+
+    LOCALE_CODE="$(check_locale_code "$LC_VALUE")"
+    
+    if [ "$(echo "$LOCALE_CODE" | awk '{print $2}')" != "LOADED" ]; then return 1; fi
+    LOCALE_CODE="${LOCALE_CODE% *}"
+    case $LC_CATEGORY in
+    LANGUAGE)   sed -i "/${LC_CATEGORY}=/d" "$LOCALE_TEMP"
+                echo "${LC_CATEGORY}=${LC_VALUE}" | tee -a "$LOCALE_TEMP"
+                ;;
+        LANG)   sed -i "/^LC_/d" "$LOCALE_TEMP"
+                sed -i "/${LC_CATEGORY}=/d" "$LOCALE_TEMP"
+                echo "${LC_CATEGORY}=${LOCALE_CODE}" | tee -a "$LOCALE_TEMP"
+                ;;
+           *)   sed -i "/${LC_CATEGORY}=/d" "$LOCALE_TEMP"
+                echo "${LC_CATEGORY}=${LOCALE_CODE}" | tee -a "$LOCALE_TEMP"
+                ;;
+    esac
+    
+    # Saving changes
+    echo "# locale configuration generated with locale-antix" > "$LOCALE_FILE"
+    cat "$LOCALE_TEMP" >> "$LOCALE_FILE"
+}
+export -f set_locale
+
+check_locale_code(){
+    local LOCALE_CODE LOCALE_FIND CORRECT_CODE LOCALE_STATE
+    LOCALE_CODE="${1}"
+    
+    LOCALE_FIND="$(grep "$LOCALE_CODE" /etc/locale.gen | grep -E 'utf8|UTF-8' | sed 's/^# /#/' | awk '{print $1}' | sort -u)"
+    # Get correct locale code
+    if [ $(echo "$LOCALE_FIND" | grep -c "${LOCALE_CODE}.UTF-8$") -gt 0 ]; then
+        CORRECT_CODE="${LOCALE_CODE}.UTF-8"
+    elif [ $(echo "$LOCALE_FIND" | grep -c "${LOCALE_CODE}$") -gt 0 ]; then
+        CORRECT_CODE="$LOCALE_CODE"
+    fi
+    
+    # Find out if the locale code is loaded or not
+    if [ $(echo "$LOCALE_FIND" | grep -x -c "$CORRECT_CODE") -gt 0 ]; then
+        LOCALE_STATE="LOADED"
+    elif [ $(echo "$LOCALE_FIND" | grep -x -c "#$CORRECT_CODE") -gt 0 ]; then
+        LOCALE_STATE="UNLOADED"
+    fi
+    
+    if [ -z "$CORRECT_CODE" ]; then LOCALE_STATE="MISSING"; fi
+    
+    echo "$CORRECT_CODE $LOCALE_STATE"
+}
+export -f check_locale_code
+
+regenerate_locales(){
+    local LOCALE_LIST LOCALES_GEN GEN_TEMP ENABLE_LOCALES DISABLE_LOCALES
+    local DISABLE_LIST NEED_TO_DISABLE ENABLE_LIST NEED_TO_ENABLE
+    LOCALE_LIST="${1}"
+    LOCALES_GEN="/etc/locale.gen"
+    GEN_TEMP="$(mktemp -p /dev/shm)"
+    cat "$LOCALES_GEN" > "$GEN_TEMP"
+    
+    ENABLE_LOCALES="$(echo "$LOCALE_LIST" | grep "^TRUE" | cut -d"!" -f2)"
+    DISABLE_LOCALES="$(echo "$LOCALE_LIST" | grep "^FALSE" | cut -d"!" -f2)"
+    
+    # Disable all matching locales
+    DISABLE_LIST="$(echo "$DISABLE_LOCALES" | awk '{print "^"$0" "}')"$'\n'"$(echo "$DISABLE_LOCALES" | awk '{print "^"$0".UTF-8"}')"
+    NEED_TO_DISABLE="$(grep "UTF-8" "$GEN_TEMP" | grep -f <(echo "$DISABLE_LIST" | sort -u))"
+    if [ ! -z "$NEED_TO_DISABLE" ]; then
+        sed -f <(awk '{print "s/^"$1"/# "$1"/g"}' <(echo "$NEED_TO_DISABLE")) -i "$GEN_TEMP"
+    fi
+    
+    # Enable all matching locales
+    ENABLE_LIST="$(echo "$ENABLE_LOCALES" | awk '{print "^# "$0" "}')"$'\n'"$(echo "$ENABLE_LOCALES" | awk '{print "^# "$0".UTF-8"}')"
+    NEED_TO_ENABLE="$(grep "UTF-8" "$GEN_TEMP" | grep -f <(echo "$ENABLE_LIST" | sort -u) | cut -d" " -f2-)"
+    if [ ! -z "$NEED_TO_ENABLE" ]; then
+        sed -f <(awk '{print "s/^# "$1"/"$1"/g"}' <(echo "$NEED_TO_ENABLE")) -i "$GEN_TEMP"
+    fi
+    
+    echo "Checking differences"
+    diff "$LOCALES_GEN" "$GEN_TEMP"
+    if ! $(cmp -s "$LOCALES_GEN" "$GEN_TEMP"); then
+        echo "Regenerating locales"
+        cat "$GEN_TEMP" > "$LOCALES_GEN"
+        x-terminal-emulator -T $"Regenerating locales" -e /bin/bash -c "sudo locale-gen"
+    fi
+        
+    rm -f "$GEN_TEMP"
+}
+
+cleanup() {
+    ### Remove temporary files
+    rm -f -- "$LOCALE_TEMP"
+    rm -f -- "$STATE_TEMP"
+	echo "Cleanup and exiting"
+}
+
+### Set trap on EXIT for cleanup
+trap cleanup EXIT
+
+main
+
+
+    #~ --field="<b>"$"Language:""</b> ""$(echo "$CURRENT_LANGUAGE" | cut -d" " -f3-)":LBL '' \
+    #~ --field=$"Language":CB "$YAD_LIST" \
+    
+    
+#~ echo This script will try to perform an update first. Make sure you are on-line!
+#~ #Perform system update
+#~ sudo apt update
+#~ #Detect system language
+#~ lang=$(locale | grep LANG= | cut -d= -f2 | cut -d. -f1)
+#~ #corrected_lang=
+#~ OUTPUT="${lang//[\_\-\`]}"
+#~ corrected_lang_sign=$(echo "${lang//_/-}")
+#~ corrected_lang_lowercase=$(echo "${corrected_lang_sign,,}")
+
+#~ #Not tested- there seems to be only "fr" language packs, so probably we'll have to try to convert variable with "fr-*" to "fr" -If this works, adapt to other languages, as needed:
+#~ if [[ $corrected_lang_lowercase == *"fr"* ]]; then
+  #~ corrected_lang_lowercase=fr
+#~ fi
+
+#~ #check if firefox-esr is installed, if so, try to localize it
+#~ if  [ -x "$(command -v firefox-esr)" ]; then
+#~ #state packege name to install, without the language code:
+#~ partial_package_name=firefox-esr-l10n-
+#~ #add the correct language code to the end of the package name
+#~ package_name=$partial_package_name$corrected_lang_lowercase
+   #~ echo firefox-esr is installed... Trying to install localization package...
+#~ #try to install the localization package
+   #~ sudo apt install $package_name
+#~ fi
+
+#~ #check if libreoffice is installed, if so, try to localize it
+#~ #try to correct language code problems: there is no libroffice pt-pt language pack, only "pt" or "pt-br" so, convert language variable from "pt-pt" to "pt", if needed.
+#~ if [[ $corrected_lang_lowercase == *"pt-pt"* ]]; then
+  #~ corrected_lang_lowercase=pt
+#~ fi
+
+#~ #Check if libreoffice is installed, if so, try to localize it...
+#~ if  [ -x "$(command -v libreoffice)" ]; then
+#~ #state packege name to install, without the language code:
+#~ partial_package_name=libreoffice-l10n-
+#~ #add the correct language code to the end of the package name
+#~ package_name=$partial_package_name$corrected_lang_lowercase
+   #~ echo Libreoffice is installed... Trying to install localization package...
+#~ #try to install the localization package
+   #~ sudo apt install $package_name
+#~ fi
+#~ echo DONE! You can now close this window!

@@ -1,0 +1,38 @@
+#!/bin/bash
+#echo removedesktopicon ... starting for spacefm or zzzfm >> ~/removedesktopicon.log
+# removes icon on desktop named device-label or device
+
+# BobC 08/04/22 
+
+#echo usage from fm: removedesktopicon %m %v %l
+#echo parm1 - %m - device mount point
+#echo parm2 - %v - device (eg: /dev/sdc1)
+#echo parm3 - %l - device label
+
+# parm2 is required
+if [ -z "$2" ]
+then
+   { 
+	   echo "removedesktopicon parm2 - device is required"
+#	   echo "removedesktopicon parm2 - device is required" >> ~/removedesktopicon.log
+	   exit 1
+   }
+fi
+
+basnam=$(basename "$2")
+#echo basnam: $basnam >> ~/removedesktopicon.log
+
+# if parm3 label given, append to device as filename
+if [ ! -z "$3" ]
+then
+   { 
+	   basnam="$basnam-$3"
+       #echo basnam: $basnam >> ~/removedesktopicon.log
+   }
+fi
+
+# if Deskdop link exists remove it
+[ ! -L "$HOME/Desktop/$basnam" ] && exit 1
+echo removedesktopicon ... "$HOME/Desktop/$basnam"  was fnd, remove link: rm -f "$HOME/Desktop/$basnam"
+#echo removedesktopicon ... "$HOME/Desktop/$basnam"  was fnd, remove link: rm -f "$HOME/Desktop/$basnam" >> ~/removedesktopicon.log
+rm -f "$HOME/Desktop/$basnam"

@@ -1,0 +1,67 @@
+#!/bin/bash
+
+help() {
+    echo "Usage:"
+    echo "Example: Rox-Wallpaper /path/to/wallpaper.jpg";
+    echo "Example 2: Rox-Wallpaper --centre /path/to/wallpaper";
+    echo "Example 3: Rox-Wallpaper --background-colour 4e4e4e";
+    echo "-sc | -SC | --scale               Scale the wallpaper to the screen";
+    echo "-st | -ST | --stretch             Stretch the wallpaper to the screen";
+    echo "-f  | -F  | --fit                 Fit the wallpaper to the screen";
+    echo "-c  | -C  | --centre              Centre the wallpaper on the screen";
+    echo "-t  | -T  | --tile                Tile the wallpaper on the screen";
+    echo "-bc | -BC | --background-colour   Set background colour using hex colour code";
+    echo "-h  | -H  | --help      This help text";
+    echo "";
+    exit;
+    }
+
+while [ ! -z "$1" ]; 
+do
+    case $1 in
+        --help|-h|-H)                   help            ;;
+        --scale|-sc|-SC)                style="scale"   ;;
+        --stretch|-st|-ST)              style="stretch" ;;
+        --fit|-f|-F)                    style="fit"     ;;
+        --centre|-c|-C)                 style="centre"  ;;
+        --tile|-t|-T)                   style="tile"    ;;
+        --background-colour|-bc|-BC)    style="colour";
+                                        shift;
+                                        filename="$1";
+                                        break;;
+        *)
+            if [[ -f "$1" ]]; then
+                filename="$1"
+            else
+                echo "Passed option '$option', is not a valid option or a correct file path";
+            fi
+        ;;
+    esac
+    shift
+done
+
+if [ -z "$style" ]; then style="stretch"; fi
+
+if [ "$style" == "colour" ]; then
+    colour_code=$(echo ${filename,,} |tr -d "#")
+    if (( ! 16#"${colour_code:0:6}" )) 2> /dev/null; then
+        echo "Passed colour option is not a valid hex code: changing to 4e4e4e";
+        colour_code="8a8a8a";
+    fi
+    sed -i "s/pinboard_bg_colour\">.*</pinboard_bg_colour\">#${colour_code:0:6}</g" $XDG_CONFIG_HOME/rox.sourceforge.net/ROX-Filer/Options;
+    sed -i "/<backdrop style=.*>.*<\/backdrop>/d" $XDG_CONFIG_HOME/rox.sourceforge.net/ROX-Filer/pb_antiX-$XDG_CURRENT_DESKTOP;
+    rox --pinboard= && rox --pinboard=antiX-$XDG_CURRENT_DESKTOP;
+else
+    rox --RPC << EOF
+<?xml version="1.0"?>
+<env:Envelope xmlns:env="http://www.w3.org/2001/12/soap-envelope">
+ <env:Body xmlns="http://rox.sourceforge.net/SOAP/ROX-Filer">
+  <SetBackdrop>
+   <Filename>$filename</Filename>
+   <Style>$style</Style>
+  </SetBackdrop>
+ </env:Body>
+</env:Envelope>
+
+EOF
+fi

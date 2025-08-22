@@ -1,0 +1,188 @@
+#!/bin/bash
+
+############   CHECK FOR LANGUAGE SUPPORT  ############
+####  Simple command line program that checks for  ####
+#### recommended packages to support the system's  ####
+####   language. Inspired by the Ubuntu program    ####
+#### "check-language-support" in language-selector ####
+####   # Initially developed for antiX linux #     ####
+#######################################################
+
+
+#######################################################
+###                 WORK IN PROGRESS                ###
+#######################################################
+
+main(){
+    AVAILABLE_PACKAGES="$(get_available_pkgs)"
+    INSTALLED_PACKAGES="$(get_installed_pkgs)"
+    
+    MY_LANGUAGE="$(echo "$LANGUAGE" | cut -d"." -f1 | cut -d":" -f1)"
+    if [ -z "$MY_LANGUAGE" ]; then
+        MY_LANGUAGE="$(echo "$LANG" | cut -d"." -f1 | cut -d":" -f1)"
+    fi
+    #~ MY_LANGUAGE="ca_ES@valencia"
+    
+    LOCALE_PATTERNS="-l10n\|-i18n\|-locale-\|-help-\|hunspell-"
+    # Check all possible localization packages
+    ALL_LOCALE_PACKAGES="$(find_packages "${AVAILABLE_PACKAGES}" "$LOCALE_PATTERNS")"
+    
+    # Check for installed packages
+    LOCALE_AVAILABLE="$(echo "$ALL_LOCALE_PACKAGES" | sed 's/-l10n.*//' | sed 's/-i18n.*//' | sed 's/-locale-.*//' | sed 's/-help-.*//' | sort -u)"
+    INSTALLED_MATCH="$(echo "$INSTALLED_PACKAGES" | grep -o -f <(echo "$LOCALE_AVAILABLE" | sed 's/^/^/g') | sort -u)"
+    
+    # Get list of possible packages to install
+    RECOMMENDED_LIST="$(check_locale_pckg "$MY_LANGUAGE" "${ALL_LOCALE_PACKAGES}" "${INSTALLED_MATCH}")"
+    
+    FILTERED_LIST="$(echo "$RECOMMENDED_LIST" | grep -vx -f <(echo "$INSTALLED_PACKAGES"))"
+    echo $FILTERED_LIST
+}
+
+get_available_pkgs(){
+    local ALL_PACKAGES="$(apt-cache pkgnames)"
+    echo "$ALL_PACKAGES"
+}
+
+get_installed_pkgs(){
+    local INSTALLED_PACKAGES
+    INSTALLED_PACKAGES="$(dpkg -l | grep '^ii' | awk '{print $2}' | cut -d":" -f1 | sort -u)"
+    echo "$INSTALLED_PACKAGES"
+}
+
+find_packages(){
+    local PACKAGE_LIST PATTERN_USED FIND_PACKAGES
+    PACKAGE_LIST="${1}"
+    PATTERN_USED="${2}"
+    FIND_PACKAGES="$(echo "$PACKAGE_LIST" | grep -e "$PATTERN_USED" | sort -u)"
+    echo "$FIND_PACKAGES"
+}
+
+check_locale_pckg(){
+    local MY_LANGUAGE LOCALE_LIST INSTALLED_PCKS
+    MY_LANGUAGE="${1}"
+    LOCALE_LIST="${2}"
+    INSTALLED_PCKS="${3}"
+    
+    LANG_REG_CODE="$(echo "$MY_LANGUAGE" | tr "[A-Z]" "[a-z]")"
+    LANG_CODE="$(echo "$LANG_REG_CODE" | cut -d"_" -f1 | cut -d"@" -f1)"
+    if [ $(echo "$LANG_REG_CODE" | grep -c "_") -gt 0 ]; then
+        REG_CODE="$(echo "$LANG_REG_CODE" | cut -d"_" -f2 | cut -d"@" -f1)"
+    fi
+    if [ $(echo "$LANG_REG_CODE" | grep -c "@") -gt 0 ]; then
+        MOD_CODE="$(echo "$LANG_REG_CODE" | cut -d"@" -f2)"
+    fi
+    
+    REDUCED_LIST="$(echo "$LOCALE_LIST" | grep -f <(echo "$INSTALLED_PCKS" | sed 's/^/^/g'))"
+    #~ echo "$REDUCED_LIST"
+    #~ echo ""
+    #~ echo "MATCH"
+    
+    # Check for LANG+REG+MOD codes
+    SEARCH_CODE="${LANG_CODE}-${REG_CODE}-${MOD_CODE}"
+    SEARCH_RESULT="$(echo "$REDUCED_LIST" | grep -e "-${SEARCH_CODE}$")"
+    if [ ! -z "$SEARCH_RESULT" ]; then
+        echo "$SEARCH_RESULT"
+        REDUCED_LIST="$(echo "$REDUCED_LIST" | grep -v -f <(echo "$SEARCH_RESULT" | sed "s/-${SEARCH_CODE}$//"))"
+    fi
+    # Check for LANG+REG codes
+    SEARCH_CODE="${LANG_CODE}-${REG_CODE}"
+    SEARCH_RESULT="$(echo "$REDUCED_LIST" | grep -e "-${SEARCH_CODE}$")"
+    if [ ! -z "$SEARCH_RESULT" ]; then
+        echo "$SEARCH_RESULT"
+        REDUCED_LIST="$(echo "$REDUCED_LIST" | grep -v -f <(echo "$SEARCH_RESULT" | sed "s/-${SEARCH_CODE}$//"))"
+    fi
+    
+    # Check for LANG+MOD codes
+    SEARCH_CODE="${LANG_CODE}-${MOD_CODE}"
+    SEARCH_RESULT="$(echo "$REDUCED_LIST" | grep -e "-${SEARCH_CODE}$")"
+    if [ ! -z "$SEARCH_RESULT" ]; then
+        echo "$SEARCH_RESULT"
+        REDUCED_LIST="$(echo "$REDUCED_LIST" | grep -v -f <(echo "$SEARCH_RESULT" | sed "s/-${SEARCH_CODE}$//"))"
+    fi
+    # Check for LANG codes
+    SEARCH_CODE="${LANG_CODE}"
+    SEARCH_RESULT="$(echo "$REDUCED_LIST" | grep -e "-${SEARCH_CODE}$")"
+    if [ ! -z "$SEARCH_RESULT" ]; then
+        echo "$SEARCH_RESULT"
+        REDUCED_LIST="$(echo "$REDUCED_LIST" | grep -v -f <(echo "$SEARCH_RESULT" | sed "s/-${SEARCH_CODE}$//"))"
+    fi
+    
+    if [ "$LANG_CODE" != "en" ]; then
+        # Check for l10n codes
+        SEARCH_CODE="l10n"
+        SEARCH_RESULT="$(echo "$REDUCED_LIST" | grep -e "-${SEARCH_CODE}$")"
+        if [ ! -z "$SEARCH_RESULT" ]; then
+            echo "$SEARCH_RESULT"
+            REDUCED_LIST="$(echo "$REDUCED_LIST" | grep -v -f <(echo "$SEARCH_RESULT" | sed "s/-${SEARCH_CODE}$//"))"
+        fi
+        # Check for l10n codes
+        SEARCH_CODE="i18n"
+        SEARCH_RESULT="$(echo "$REDUCED_LIST" | grep -e "-${SEARCH_CODE}$")"
+        if [ ! -z "$SEARCH_RESULT" ]; then
+            echo "$SEARCH_RESULT"
+            REDUCED_LIST="$(echo "$REDUCED_LIST" | grep -v -f <(echo "$SEARCH_RESULT" | sed "s/-${SEARCH_CODE}$//"))"
+        fi
+    fi
+    #~ echo ""
+    #~ echo "LEFT"
+    #~ echo "$REDUCED_LIST"
+}
+
+
+
+main
+
+
+
+
+
+#~ # For l10i support
+#~ apt-cache pkgnames | grep -e "l10n" | sed 's/-l10n.*//' | sort -u
+#~ # may need to check -l10n-xpi-* (firefox)
+
+#~ # For i18n support - ask forum
+#~ apt-cache pkgnames | grep -e "i18n" | sed 's/-i18n-.*//' | sort -u
+
+#~ # locale support
+#~ apt-cache pkgnames | grep -e "-locale-" | sed 's/-locale-.*//' | sort -u
+
+#~ # 
+
+#~ # For installed packages
+#~ dpkg -l | grep '^ii' | awk '{print $2}' | cut -d":" -f1 | sort -u
+
+#~ # Special packages
+#~ gimp-help[-*] (gimp)
+#~ libreoffice-help[-*] (libreoffice)
+#~ libreoffice-lightproof[-*] (libreoffice)
+#~ mythes[-*] (extra for libreoffice, thesaurus)
+#~ hyphen[-*] (extra for libreoffice, divide words)
+#~ maint-guide-* (Debian maintainer guide)
+#~ tesseract-ocr (do NOT include)
+#~ texlive-lang-* (special case, group of languages)
+#~ asterisk-prompt-*
+#~ debian-faq-*
+#~ fortunes-*
+#~ kicad-doc-*
+#~ manpages-
+#~ sqwebmail-*
+#~ debian-edu-doc-*
+#~ gosa-help-*
+#~ gnumed-client-*
+#~ udo-doc-*
+
+#~ #Spellchecking and dictionary
+#~ #aspell - Optional? - too old
+#~ #myspell - Optional?
+#~ hunspell
+#~ #hunspell, check for -frami for some languages, and make this one prefferred.
+
+#~ #Extra locale support (optional)
+#~ [-locale$]
+#~ [-locales$]
+
+
+#~ ### FONTS
+#~ xfonts-
+#~ fonts-
+#~ noto ???

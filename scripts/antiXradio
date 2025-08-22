@@ -1,0 +1,693 @@
+#!/bin/bash
+# -*- coding: utf-8 -*-
+# Licence : Full GLP 3 license. (Please see footer lines)
+# Created by Ch'Pol, PPC, Wallon and Robin in 12/2023 for antiX Linux Community. Please keep this atribution.
+
+# The script uses lists of radio stations called radios_language_code.txt- each line is a radio station first is the name_of_the_station , Link_of_the_streaming_audio_file 
+#   Comments lines allowed, started by a sharp sign, also at end of entry lines. Empty lines allowed.
+
+# Dependencies: mpv, yad, socat, nc, sed
+
+# IMPORTANT: If script doesn't start, please check for presence of lockfile '/dev/shm/antiXradio_running' and remove it if present.
+
+# You can turn of autostart by setting the entry in it's config file ~/.config/antiXradio/antiXradio.conf from démarrage="true" to démarrage="false" (case sensitive)
+# You can set the width of icy-title info-window in settings file by writing the desired width in px to the largeur entry, e.g. largeur="600"
+
+# New in ver. 0.33: Added recording of streams. File format: “.ts” is a universal streaming format, since we can't know what format the input from stream is.  No conversion
+# is done. From some stations you'll get mp3, others come along with aac or watever. But mpv can play .ts files, so this file type should be set to open with mpv as default
+# in zzzFM for antiX. (This is also needed by aCSTV)
+# Added in ver 0.34: Tiny "what's playing now" window, fed by icy-titles from radio stations stream provided by mpv via ipc server socket. (Method borrowed from aCSTV)
+# Bugfix by Ch'Pol ver 0.34a: antiXradio was killing mpv instances not belonging to it on startup and when switching programs. Fixed bx adding a marker file.
+# 0.35 improved json readout and some minor bugfixings, some cleanup
+# 0.36 improved script logic and management of windows
+# 0.37 cleanup, bugfixing, reducing complexity, individual antiX player icon, tooltips instead of header text.
+# 0.38 changed method to quit mpv; introduced a debug mode
+# 0.38b hardened against the issue with not properly isolated process ids in some basic antiX tools. Hence kill 0 closes more than just what belongs to the process group
+#   of antiXradio script in some cases, when started by a launcer not caring for proper process group separation. Fix ported from aCSTV, which had seen the very same issue.
+# 0.39 added checkbox for toggle of icy title info window, for this switched to yad paned display
+# 0.39c The Yad panel shutter is set up for small lists.
+# 0.39d Calculate value for pane splitter from windowmanager for large lists
+# 0.40 Made last state persistent by reading/writing from/to a config file in user's home folder. Moved icons to system folders. some bugfixing and improvement in handling
+#    added an exit warning when playing along while main window is closed completely. Added autostart functionality.
+# 0.41 Improved date format of recording file. Fixed lockfile not being removed on ctrl+c by adding INT to the EXIT statement in the cleanup trap. (Needed only on POSIX
+#    shells like dash on which antiX runs it's programs). Fixed positioning of icy-title info-window if taskbar at top or left border of screen. Some more bugfixing again.
+# 0.41a to 041c Minor changes to text display and correction of icf window abscissa. Bugfixing localised date format used in filenames.
+# 0.41d, 0.42 added recording notifier to system statusbar. This needs a named gtk icon to come up in proper size; some preparations for packaging. Workaround for Herbstluftwm not
+#    setting properly mandatory _NET_WORKAREA property.
+# 0.43 improved routine for detection of icy title on slow devices, speeds up processing on fast devices the same time. Fix:Click on recording icon brings up main window now
+#    as designed. Improved noteability of running a recording by replacing symbol used in window border on recording.
+# 0.44 code cleanup; consistent wording in translatable strings; smoothened workflow for leaving list selection window without changes (no restart of current reception or recording)
+#    Fixed locale detection for locales with more than two characters; named icons to make them appear on all antiX versions and flavours; moved lockfile from /tmp to /dev/shm for
+#    more reliable processing on devices with slow harddrives.
+# 0.45/0.46 feature update: added update mechanism for stations lists from /usr/local/lib/antiXradio in which files run in from package upgrade to user's home folder.
+#      added recording information file, documenting what was recorded (available and written only if icy title window is activated AND station transmits icy-titles.)
+
+version=0.46
+
+TEXTDOMAINDIR=/usr/share/locale
+TEXTDOMAIN=antiXradio
+
+[ "$$" != "$(ps -o pgid= "$$" 2>/dev/null | grep -o "[[:digit:]]*")" ] && exec setsid "$(readlink -f "$0")" "$@" # create private process group, so kill 0 can be applied on exit.
+
+flag_debugmode=0  # default: 0; set this to 1 to get debug messages on console.
+
+# Localizable text fields, used by the script:
+mv_x=$"Exit"
+play_button_text=$"Play"
+stop_button_text=$"Stop"
+other_list_button_text=$"Load another list"
+exit_button_text=$"Turn off the radio"
+return_button_text=$"Return"
+column_name=$"Radio stations:"
+no_radio_text=$"(Standby)"
+filter_text_files=$"Text files"
+select_list_text=$"Select the radio list you want to load:"
+close_window_text=$"Close window"
+stopped=$"stopped"
+record_button_text=$"Record"
+infobulle_quitter=$"This will power off the radio and stop any running station or record. If you want just \
+to close this window instead, keeping the radio playing, use the X in upper window border or the ESC key on \
+your keyboard instead. To stop reception later call antiXradio again, and press this button then."
+infobulle_changer=$"This will allow you to select another stations list from a folder on your file system. \
+You may edit the stations lists within a text editor, just make sure to keep the format you find in it."
+infobulle_pause=$"Stop current radio reception or recording. Starting another station or another \
+recording will also stop the current reception."
+infobulle_enregistrement=$"Record what the selected station plays to a file in your home folder's \
+“Radio-Recordings” directory. The file will have .ts extension and can be played with MPV media player. \
+You may convert it after recording was completed to whatever format (mp3, mka, ogg m4a) by means of a \
+audio conversion tool (e.g. ffmpeg or audacity)"
+infobulle_passer=$"This will start reception of selected radio station. You need to be connected to the \
+internet to receive the radio streams via network."
+infobulle_ecraser=$"This will bluntly overwrite all stations lists in ~/.config/antiXradio/stations \
+(all the old files will be saved to .bak extension. Existing .bak files will get overwriten)"
+infobulle_ecraser_soigneux=$"Stations lists you have modified will not be replaced, instead the update \
+will be written next to them with the extension .new so you can compare using e.g. »meld«, and transfer \
+from the update to your individual lists what you feel like."
+infobulle_non_merci=$"Please care yourself for updating your collection of lists residing in \
+~/.config/antiXradio/stations from the new files present in /usr/local/lib/antiXradio/stations"
+reminder_sortir=$"Stop radio broadcasts and recordings if any, exit antiXradio"
+reminder_retour=$"Cancel action and return to the main window"
+reminder_fermer=$"Listen to the radio station without distracting window. Launch the radio later again from antiX \
+main menu to change radio channel, stop radio reception or recording, or to exit antiXradio."
+
+# Declare variables
+mpvsocket="/dev/shm/antiXradio-mpv-socket-$$00" # socket address to commnication with mpv's ipc server.
+fifo_warteschlange="/dev/shm/antiXradio-fifo-$$03"  # fifo buffer for yad notification
+yad_paned_01="/dev/shm/antiXradio-paned-$$01" # output file for yad pane 1
+yad_paned_02="/dev/shm/antiXradio-paned-$$02" # output file for yad pane 2
+tmp_fenetre_icy="/dev/shm/antiXradio-fenetre_icy-$$04" # flag file to manage exit of loop for asking mpv ipc server for stream infos
+tmp_rd_running='/dev/shm/antiXradio_running' # flag file, present when an instance of antiXradio is running already.
+tmp_rd_unmapped='/dev/shm/antiXradio_unmapped' # flag file, present when the main window was unmapped (not visible on screen or in taskbar or in task-switcher)
+tmp_comp_NEW="/dev/shm/antiXradio-stations-$$05"  # temp file for stations list update
+tmp_comp_ALL="/dev/shm/antiXradio-stations-$$06"  # temp file for stations list update
+tmp_comp_OK="/dev/shm/antiXradio-stations-$$07"   # temp file for stations list update
+tmp_comp_FAIL="/dev/shm/antiXradio-stations-$$08" # temp file for stations list update
+tmp_ready="/dev/shm/antiXradio-stations-$$09"  # flag file for stations list update to wait until list is read at startup.
+antiXradio_base=~/.config/antiXradio  # private config folder of antiXradio
+antiXradio_conf="$antiXradio_base/antiXradio.conf"  # antiXradio cofiguration file
+antiXradio_lib="/usr/local/lib/antiXradio"    # global antiXradio resource folder
+dossier_base_enregistrement=~/$"Radio-Recordings" # recordings basefolder
+ip_pour_tester_connexion="8.8.8.8 443"         # To check the Internet connection, enter a reliable IP server address with a port separated by a space, WITHOUT COLON between
+symbol_internet=antiXradio_no_internet       # registered icon names (internet connection check icon)
+symbol_info=antiXradio_exitinfo              # registered icon names (exit dialog icon)
+symbol_antiXradio=antiXradio                 # registered icon names (main icon)
+symbol_aufnahme=antiXradio2                  # registered icon names (recording icon)
+boutonCoch=()
+radioFreq=()
+icy_yad=FALSE # startup setting for yad checkbox icy title info window. valid: FALSE (default), TRUE (case sensitive!)
+demarrage=true # initial autoplay setting; true/false; default: true (case sensitive)
+reminder=FALSE # initial setting for display of reminder on exit by X in window border or ESC key, inverted logic!; TRUE/FALSE (case sensitive!)
+largeur=350 # initial width of icy-title info-window in px
+compat=1    # workaround for HerbstluftWM; 0 (zero) if running on Herbstluft, 1 (one) for all other window managers
+
+# Create folder for taking the recordings and config folder if not present.
+mkdir -p "$dossier_base_enregistrement"
+mkdir -p "$antiXradio_base/stations"
+
+# Check for dependencies: yad, mpv, socat, nc, sed
+   manquer_dep=false
+   for i in mpv yad socat nc sed; do
+      if ! [ -x "$(command -v $i)" ]; then echo "'$i'"" "$"not found."; manquer_dep=true; fi
+   done
+   if $manquer_dep; then echo -e $"The installation of this script has failed. Make sure the above command(s)\n\
+is (are) available on your system and please contact package maintainer.\n\
+antiXradio Leaving."; exit 1; fi
+
+# Prepare cleanup
+function déblayage(){
+   break 2>/dev/null # needed to escape the main loop, otherwise it runs forever
+   echo_debug "Cleaning up:"
+   tuer_mpv
+   rm -f "$mpvsocket" 2>/dev/null
+   rm -f '/dev/shm/antiXradio-mpv-socket-'* 2>/dev/null # let's care for hangovers (we have to clean up for lazy mpv here always) Active instances are not affected when script is called a second time
+   rm -f "$tmp_rd_running" 2>/dev/null
+   rm -f "$tmp_rd_unmapped" 2>/dev/null
+   rm -f "$tmp_fenetre_icy" 2>/dev/null
+   rm -f "$yad_paned_01" 2>/dev/null
+   rm -f "$yad_paned_02" 2>/dev/null
+   rm -f "$tmp_ready" 2>/dev/null
+   rm -f "$tmp_comp_OK" 2>/dev/null
+   rm -f "$tmp_comp_ALL" 2>/dev/null
+   rm -f "$tmp_comp_FAIL" 2>/dev/null
+   rm -f "$tmp_comp_NEW" 2>/dev/null
+   rm -f "$fifo_warteschlange" 2>/dev/null
+   kill 0
+}
+
+# Simple debug message printer (as per Xecure)
+function echo_debug(){
+   [ $flag_debugmode == 1 ] && echo -e "$*" >&2
+}
+
+# Spracheinstellungen (get locale settings)
+function déterminer_langue(){
+   ui_lang_4="$(locale | grep ^LANG= | cut -d= -f2 | cut -d. -f1)"        # don't use system variable $LANG here, it causes an "rev: stdin: Invalid or incomplete multibyte or wide character" error in many languages for some reason.
+#   ui_lang_2="$(locale | grep ^LANG= | cut -d= -f2 | cut -d_ -f1)"        # catch for fields rather than for fixed positions; there exist some three character codes, e.g. „fil_PH”
+#   ui_land=$(cut -d_ -f2 <<<"$ui_lang_4"); ui_land=${ui_land,,}
+    echo_debug "User language detected: $ui_lang_4"
+}
+
+# Function to calculate the dimension for main window and it's splitter for paned yad
+calculer_dimension_fenêtres(){
+   # Prepare drawing of main window:
+   h_max="$(wmctrl -d | grep -F \* | tr -s ' ' | cut -d' ' -f4 | cut -dx -f2)" ;     # ask windowmanager for true maximal height of current desktop
+   compat=1 # flag for special treatment of herbstluftwm
+   if $(wmctrl -m | grep herbstluft >/dev/null); then h_max="$(herbstclient list_monitors | grep -F \0: | sed -e "s/×/ /g" -e "s/+/ /g" | cut -d' ' -f3)"; compat=0;\
+   echo_debug "Applying fixes for HerbstluftWM."; fi # we are running on herbstluftwm, workaround needed
+   h_max=$(( $h_max - 100 )) ;                # you don't want the window to stick to the edges of the screen
+   h=$(( 100 + 24 * $n )) ;                    # calculate needed yad window height
+   [ $h -gt $h_max ] && h=$(( $h_max - 100 )) # reset height somewhat lower than maximal desktop height for long lists
+   h_splitter=$(( 30 + 24 * $n )) # calculate needed yad paned splitter height (small lists)
+   [ $h_splitter -gt $h_max ] && h_splitter=$(( $h - 80 )) # reset splitter height matching actual window size for long lists
+}
+
+# Function to calculate icy window position from available space on screen
+function calculer_position_icy(){
+   if [ $compat == "1" ] ; then
+      posxIcy="$(xprop -root '_NET_WORKAREA' | sed -e "s/, / /g" | cut -d' ' -f3)" ;
+      posyIcy="$(xprop -root '_NET_WORKAREA' | sed -e "s/, / /g" | cut -d' ' -f4)" ;
+   else
+      posxIcy=posyIcy=0            # herbstluftwm: no toolbars or panel
+   fi
+}
+
+# Function for reminding user of he can't exit antiXradio with the X in upper window border or ESC key
+function info_exit(){
+   echo_debug 'info_exit'":\n flag_enregistrement: $flag_enregistrement\n flag_ecouter: $flag_ecouter\n flag_demarrage: $flag_demarrage\n flag_nochange: $flag_nochange"
+   if ! ($flag_enregistrement || $flag_ecouter || $flag_demarrage || $flag_nochange); then tuer_mpv; rm "$tmp_rd_running"; exit 0; fi  # if no playback or recording we can exit immediately.
+   if ! ${reminder,,}; then
+      echo_debug " └─ reminder: $reminder (inverted logic!)\n └─ Displaying reminder window before closing main window"
+      yad_reminder=$(yad --window-icon="$symbol_info" --center --form \
+      --title=$"antiXradio" --borders=15 \
+      --field=$"\n\t<b> Please note! </b>\n\n\t When using the ESC key or the X from upper window\n\t borders, only the window will be closed while the\n\t radio keeps playing (and/or recording).\n\t To power off the radio later, please start antiX Radio \n\t and click the '<b>$exit_button_text</b>' button on the lower \n\t left section of it's window. \n\n":lbl \
+      --field=" "$"Got it. Don’t show me again.":chk \
+      --field=" ":lbl "" "$reminder" \
+      --button="$exit_button_text!!$reminder_sortir":0 \
+      --button="$return_button_text!!$reminder_retour":2 \
+      --button="$close_window_text!!$reminder_fermer":4 )
+      yad_result_exit="$?"
+      [ -n "$yad_reminder" ] && reminder=$(sed -n 's/^.*||*\(FALSE\|TRUE\)||*.*$/\1/p' <<<"$yad_reminder")
+      echo_debug "User selection for future:\n └─ reminder: $reminder (inverted logic!)"
+      if ${reminder,,} && [[ "$yad_result_exit" =~ ^(0|2|4)$ ]]; then
+         echo_debug " └─ Changing reminder value in config file to TRUE (inverted logic!)"
+         sed -i '/^'"reminder"'=..*$/c '"reminder=\"TRUE\""'' "$antiXradio_conf" # replace string in config file separately without touching other settings 
+      fi
+      case "$yad_result_exit" in
+         0)   echo_debug "Button received: Quit player\n └─ calling tuer_mpv\n └─ Removing lockfile $tmp_rd_running"; tuer_mpv; rm "$tmp_rd_running"; exit 0;;
+         2)   echo_debug "Button received: Return to main window without any action"; flag_nochange=true;;
+         4)   touch "$tmp_rd_unmapped"; for i in $(xdotool search --name $"antiXradio"" – "); do xdotool windowunmap $i; \
+              done; echo_debug "info_exit: antiXradio sleeping."; while [ -f "$tmp_rd_unmapped" ]; do sleep 1; done; echo_debug "info_exit: antiXradio waking."; \
+              flag_nochange=true;;
+         252) reminder="FALSE"; echo_debug "ESC key or X received: Return to main window without any action"; flag_nochange=true;;
+      esac
+   else
+      echo_debug " └─ reminder: $reminder (inverted logic!)\n └─ closing window by unmapping \n └─ Writing flag file $tmp_rd_unmapped"
+      touch "$tmp_rd_unmapped"
+      for i in $(xdotool search --name $"antiXradio"" – "); do
+         echo_debug "Unmapping window $i"
+         xdotool windowunmap $i
+      done
+      echo_debug "info_exit: antiXradio sleeping."
+      while [ -f "$tmp_rd_unmapped" ]; do sleep 1; done
+      echo_debug "info_exit: antiXradio waking."
+   fi
+}
+
+# Function for checking Internet connection. (check internet connection)
+function vérifier_connexion {
+echo_debug "Checking internet connection:"
+flag_retry=true
+while $flag_retry; do
+   if ! nc -zw1 $ip_pour_tester_connexion; then
+      yad --center --fixed --borders=10 \
+--window-icon="$symbol_internet" \
+--title=$"Internet connection error." \
+--text="<b>"$"No Internet connection found.""</b>\n\n"$"Please connect to the Internet before\ntrying again or you may exit antiXradio.""\n" \
+--button=$"Exit antiXradio":4 --button=$"Try again":6
+      case $? in
+         4)  echo_debug " └─ User abort.";
+                exit 1;;
+         252)  echo_debug " └─ User abort."
+                exit 1;;
+         6)  flag_retry=true;;
+      esac
+   else
+      echo_debug " └─ Connection OK."
+      break
+   fi
+done
+}
+
+# Function to read the antiXradio configuration file, if any
+function lire_conf(){
+   if [ -f "$antiXradio_conf" ]; then # only read data if there is a file, otherwise use built in constant
+      echo_debug "Reading config file $antiXradio_conf:"
+      l_icy_yad="$(sed -n 's/^icy="\(TRUE\|FALSE\)".*$/\1/p' "$antiXradio_conf")"; [ ! -z "$l_icy_yad" ] && icy_yad="$l_icy_yad"  # read status of icy-title info-window
+      l_der="$(sed -n 's/^der="\([[:digit:]][[:digit:]]*\).*$/\1/p' "$antiXradio_conf")"; [ ! -z "$l_der" ] && der="$l_der" # read last used number in list played
+      l_radios="$(sed -n 's/^radios="\(..*\)"$/\1/p' "$antiXradio_conf")"; [ ! -z "$l_radios" ] && radios="$l_radios" # read last used radio list filename
+      l_demarrage="$(sed -n 's/^démarrage="\(true\|false\)".*$/\1/p' "$antiXradio_conf")"; [ ! -z "$demarrage" ] && demarrage="$demarrage" # read whether radio should play immediately on startup or not
+      l_reminder="$(sed -n 's/^reminder="\(TRUE\|FALSE\)".*$/\1/p' "$antiXradio_conf")"; [ ! -z "$l_reminder" ] && reminder="$l_reminder" # read whether start playback automatically
+      l_largeur="$(sed -n 's/^largeur="\([[:digit:]][[:digit:]]*\)".*$/\1/p' "$antiXradio_conf")"; [ ! -z "$l_largeur" ] && largeur="$l_largeur" # read width of icy info window in px
+      echo_debug ' └─ $radios: '"$radios\n"' └─ $icy_yad:'" $icy_yad\n"' └─ $der:' \
+"$der\n"' └─ $demarrage: '"$demarrage\n"' └─ $reminder:' "$reminder\n"' └─ $largeur:' "$largeur"
+   fi
+}
+
+# Function to write the antiXradio configuration to its configuration file
+function écrire_conf(){
+   echo_debug "Writing variables to config file:\n └─ icy: $icy_yad\n └─ der: $der\n └─ radios: $radios\n └─ démarrage: $demarrage\n └─ reminder $reminder\n └─ largeur: $largeur"
+   echo -e "icy=\"$icy_yad\"\nder=\"$der\"\nradios=\"$radios\"\ndémarrage=\"$demarrage\"\nreminder=\"$reminder\"\nlargeur=\"$largeur\"" >"$antiXradio_conf" # it's faster to write all the variables in one go instead of replacing a single one of them whenever it was changed.
+}
+
+# Function to kill mpv, the media player that plays the audio streams and kill some other things which have to be closed down the very moment when the player stops.
+tuer_mpv(){
+   echo_debug "tuer_mpv: Sending quit command to mpv"
+   mpv_response="$(echo '{ "command": ["quit"] }' | socat - "$mpvsocket" | sed 's/^{"data":\([[:digit:]][[:digit:]]*\)..*$/\1/' |  sed 's/^{"data":..*"error":"\(..*\)"}$/\1/')"
+   echo_debug " |           └─ $mpv_response"
+   if [ "$mpv_response" != "success" ]; then  echo_debug " |           └─ no response from mpv on quit command"; fi
+#   mpv_pid=$(echo '{ "command": ["get_property", "pid"] }' | socat - "$mpvsocket" | sed 's/^{"data":\([[:digit:]][[:digit:]]*\)..*$/\1/')
+#   kill $mpv_pid 2>/dev/null
+   flag_ecouter=false
+   if $flag_enregistrement; then
+      echo_debug "tuer_mpv: Sending quit command to notification icon"
+      echo 'quit' > "$fifo_warteschlange"
+      flag_enregistrement=false
+   fi
+   echo_debug " └─ Stopping icy info window transport loop by removing $tmp_fenetre_icy"
+   rm -f "$tmp_fenetre_icy" 2>/dev/null # close reading loop first before killing receiving yad info window
+   echo_debug " └─ Closing icy info"
+   for i in $(xdotool search --name $"antiXradio"" — "); do xdotool windowclose "$i"; done # close info window (long dash)
+   echo_debug " └─ Removing mpv ipc server socket $mpvsocket"
+   rm -f "$mpvsocket"
+}
+
+# Function to fill yad list with radio stations
+listeRadioYad(){
+   echo_debug "listeRadioYad: Filling yad list with radio stations from arrays, sort order: boutinCoch Counter radioNom"
+   for ((m=0; m+1<${#radioNom[@]}; m++))
+   do
+      echo ${boutonCoch[$m]} $m ${radioNom[$m]}
+      echo_debug "   ${boutonCoch[$m]} $m ${radioNom[$m]}"
+   done
+}
+
+# Function to play selected radio stream using mpv
+function maradio(){
+   tuer_mpv
+   $flag_demarrage || flag_ecouter=true
+   echo_debug "maradio: Start radio reception\n └─ invoking mpv: "${radioFreq[$1]}""
+   mpv --really-quiet --no-video --input-ipc-server="$mpvsocket" "${radioFreq[$1]}" 2>/dev/null & \
+   radioEncours=${radioNom[$1]}
+   radiosMem="$radios"
+   echo_debug " └─ Station: ${radioNom[$1]}\n └─ radiosMem: $radiosMem\n └─ invoking icy title window"
+   if $flag_icy; then
+      icy_title &
+   fi
+}
+
+# Function to play and record selected radio stream using mpv
+function enregistrement(){
+   tuer_mpv
+   flag_enregistrement=true
+   datum="$(date +%x-%X)"; datum="${datum//\//∕}"   # replacement of slash u002f by typographically identical sign u2215
+   # echo ${datum//\//󠀯󠀯⁄}  # alternative replacement, optically more significant u2044
+   sendername="${radioNom[$1]}"; sendername="${sendername//\//∕}"   # same protection for stations name from stations list, maybe some of them contain slashes
+   fichier_audio="$dossier_base_enregistrement"'/'$"radio-recording"' – '"$sendername"' – '"$datum"'.ts'
+   echo_debug "enregistrement: Start radio reception\n └─ invoking mpv: ${radioFreq[$1]}\n              └─ Writing to file $fichier_audio"
+   mpv --really-quiet --no-video --input-ipc-server="$mpvsocket" --stream-record="$fichier_audio" "${radioFreq[$1]}" 2>/dev/null &
+   date_now=$(date +%s)
+   avertissement_enregistrement
+   radioEncours=${radioNom[$1]}
+   radiosMem="$radios"
+   echo_debug " └─ Station: ${radioNom[$1]}\n └─ radiosMem: $radiosMem\n └─ invoking icy title window"
+   if $flag_icy; then
+      icy_title &
+   fi
+}
+
+# Function to put recordiing icon to status bar
+function avertissement_enregistrement(){
+   exec 9<> "$fifo_warteschlange"
+   coproc (yad --borders=10 \
+   --window-icon="$symbol_aufnahme" \
+   --title=$"antiXradio recording" \
+   --text=$"Running antiXradio recording" \
+   --command="antiXradio" \
+   --no-middle --listen \
+   --notification <&9)
+   echo "icon:"$symbol_aufnahme"" 2>&1 > "$fifo_warteschlange"
+   echo "tooltip:"$"Running antiXradio recording" 2>&1 > "$fifo_warteschlange"
+   exec 9>&-
+}
+
+# Function to get icy title info from stream
+function icy_title(){
+   if ! $flag_enregistrement; then symbol_actual="$symbol_antiXradio"; else symbol_actual="$symbol_aufnahme"; fi
+   echo_debug "icy_title:"
+   infotitle=" "
+   calculer_position_icy
+   i=0    
+   while [ $i -le 15 ]; do  # let's retry 15 times to catch even _very_ slow responses still
+      infotitle=$"antiXradio"" — ""$(echo '{ "command": ["get_property", "metadata"] }' | socat - "$mpvsocket" | \
+sed 's/^{"data":\(..*\),"request_id":0,"error":..*$/\1/'| python3 -c "import sys, json; \
+print(json.load(sys.stdin)['icy-name'])" 2> /dev/null)"
+      echo_debug "Waiting for icy-title buffer to fill: ""$infotitle"
+      [ "$(tr -s ' ' <<<"${infotitle#$"antiXradio" —}")" != " " ] && break
+      let $((i++))
+      sleep 1
+   done
+   if [[ ! $infotitle =~ ^$"antiXradio"[[:blank:]]—[[:blank:]]*$ ]]; then
+      echo_debug " └─ icy-name found: $infotitle\n └─ Writing icy window flag file: $tmp_fenetre_icy"
+>"$tmp_fenetre_icy"
+      title=" "; while [ -f "$tmp_fenetre_icy" ] ; do title="$(echo '{ "command": ["get_property", "metadata"] }' | socat - "$mpvsocket" | \
+sed 's/^{"data":\(..*\),"request_id":0,"error":..*$/\1/'| python3 -c "import sys, json; print(json.load(sys.stdin)['icy-title'])"  2> /dev/null)"; \
+sleep 1;\
+if [ ! "$title" == "$titlecurrent" ]; then titlecurrent="$title"; echo "$titlecurrent"; if $flag_enregistrement; then echo "$(date +%X --date=@$(($(date +%s)-$date_now+169200))) $titlecurrent" >> "${fichier_audio/%.ts/.txt}" 2>/dev/null; fi; fi; done 2>&1 | \
+yad --title="$infotitle" --width="$largeur" --height=10 --posx=$(($posxIcy + 5 )) --posy=$(($posyIcy + 5 )) --on-top --window-icon="$symbol_actual" --form --cycle-read --field=": " --no-buttons; \
+echo_debug " └─ Removing icy window flag file: $tmp_fenetre_icy"; \
+rm -f "$tmp_fenetre_icy" 2>/dev/null &
+   else
+      echo_debug " └─ Gave up. Not starting icy title window."
+   fi
+}
+
+# Function to start radio reception on starting antiXradio automatically
+function autostart(){
+   flag_demarrage=true
+   echo_debug "Autostart found: Station number is set to $der"
+   boutonCoch[$der]="FALSE"
+   choixType=$der
+   boutonCoch[$choixType]="TRUE"
+   radioEncours_static="$radioEncours"
+   flag_icy="${icy_yad,,}"
+   maradio $der
+   écrire_conf
+   # we don't want to set flag_ecouter here, since we want to have the main window come up.
+}
+
+# Function to check for stations files in our config dir in user's home and copy them in place if not present
+function check_stationsfiles(){
+   if [ -d "$antiXradio_base" ]; then
+      if [ -z "$(find $antiXradio_base/stations -mindepth 1)" ]; then
+         echo_debug "No files found, copying from $antiXradio_lib/stations to user's home"
+         cp -r "$antiXradio_lib/stations" "$antiXradio_base"
+      else
+         echo_debug " └─ Folder is populated."
+      fi
+   else
+        echo_debug " └─ Directory not found, copying from $antiXradio_lib/stations to user's home"
+        cp -r "$antiXradio_lib/stations" "$antiXradio_base"
+   fi
+}
+
+# Function to change stations list
+function remplacer_liste(){
+   flag_nochange=false
+   if [ ! -f "$radios" ] ; then
+      temp=$(yad --window-icon="$symbol_antiXradio" --width=800 --height=600 --center \
+      --file --file-filter "$filter_text_files | *.txt *.txt.bak *.txt.new" \
+      --filename="$antiXradio_base/stations/" \
+      --title="$radioEncours" \
+      --text="\n								${select_list_text}\n" ) ;
+      yad_result="$?"
+      [ $yad_result == 1 ] || [ $yad_result == 252 ] && flag_nochange=true  # prevent playback or recording from restart if listchange was aborted
+      if [ "$temp" = '' ] || [ -d "$temp" ]; then
+         if [ ! -f "$radiosMem" ]; then
+            radios="$antiXradio_base/stations/radios_World.txt"
+            der=0
+         else
+            radios="$radiosMem"
+         fi
+      else
+         radios="$temp"
+         der=0
+      fi
+   fi
+}
+
+# Function to read stations list
+function lire_liste(){
+   echo_debug "Reading stations list file $radios to the arrays radioNom and radioFreq, fill boutonCoch array with FALSE"
+   while IFS=',' read radioNom[$n] radioFreq[$n]; do
+      boutonCoch[$n]="FALSE"
+      ((n++))
+   done <<<"$(sed 's/&/＆/g;/^#.*$\|^[[:space:]]*$/d;${/^[[:space:]]*$/d};s/^\(..*\)[[:space:]*]#..*$/\1/;s/ /\xC2\xA0/g' "$radios")" # removes all blank lines including last, comment lines, and replaces spaces to UTF-8 hex C2 A0 (non-breaking blank)
+   boutonCoch[$der]="TRUE"        # set radiobutton to currently stored station number
+}
+
+# Function to raise unmapped instance of antiXradio
+function élever_fenêtres(){
+   if [ -f "$tmp_rd_unmapped" ]; then
+      echo_debug "flag file found, restoring visibility of another instance\n       └─ Removing visibility state flag file: $tmp_rd_unmapped"
+      rm -f "$tmp_rd_unmapped"
+   fi
+}
+
+# Function to check for presence of lockfile; exit antiXradio if present.
+check_lockfile(){
+if [ -f "$tmp_rd_running" ]; then
+   echo_debug "Trying to raise main window. Window-ID's:\n$(xdotool search --name $"antiXradio"" – ")"
+   for i in $(xdotool search --name $"antiXradio"" – "); do xdotool windowactivate $i; done # raise main window (shorter dash)
+   echo_debug "Trying to raise info window. Window-ID's:\n$(xdotool search --name $"antiXradio"" — ")"
+   for i in $(xdotool search --name $"antiXradio"" — "); do xdotool windowactivate $i; done # raise info window (longer dash)
+   echo_debug "Lockfile belonging to a running instace of antiXradio found: $tmp_rd_running\n └─ Exiting without any further action."
+   exit 0
+fi
+}
+
+# Function for updatecheck of stations list
+actualiser_stations_radios(){
+   whoami >> $antiXradio_lib/s_update
+   while :; do
+      yad --info --center --on-top --borders=15 --fixed \
+      --window-icon="$symbol_antiXradio" \
+      --image="$symbol_antiXradio" \
+      --title=$"antiXradio stations list update"\
+      --text="<b>"$"antiXradio's stations lists have been actualised.""</b>\n"\
+$"The new lists are waiting in
+\t/usr/local/lib/antiXradio/stations
+directory to be copied to your personal collection
+of stations lists in your home folder
+\t~/.config/antiXradio/stations
+From the buttons’ tooltips you can learn the options
+you have. Do you want antiXradio to do the update of
+your collection for you?""\n\n" \
+      --button=$"No thanks"!!"$infobulle_non_merci":0 \
+      --button=$"Do the math for me"!!"$infobulle_ecraser_soigneux":2 \
+      --button=$"Just overwrite"!!"$infobulle_ecraser":4
+      case $? in
+         0)  echo_debug " └─ Button 0 received. User cares himself for copying new lists in place."
+             break;;
+         2)  echo_debug " └─ Button 2 received. Call ecraser_soigneux"
+             ecraser_soigneux
+             break;;
+         4)  echo_debug " └─ Button 4 received. Call ecraser"
+             ecraser
+             break;;
+         252) echo_debug " └─ Invalid ESC received. Restore dialog";;
+      esac
+   done
+}
+
+# Function to overwrite all stations lists in user’s home on package update
+function ecraser(){
+   echo_debug "ecraser: updating all stations lists in users home from $antiXradio_lib/stations"
+   find "$antiXradio_base/stations" -name radios*.txt -exec mv '{}' '{}.bak' ';'
+   cp -r "$antiXradio_lib/stations" "$antiXradio_base"
+}
+
+# Function to selectively update stations lists in user’s home on package update
+function ecraser_soigneux(){
+   [ "$(md5sum $antiXradio_lib/stations.md5.old | cut -d' ' -f1)" == "$(md5sum $antiXradio_lib/stations.md5  | cut -d' ' -f1)" ] && return # nothing to do.
+   echo_debug "ecraser_soigneux: checking for modified stations lists in user's home"
+   grep -Fxv -f "$antiXradio_lib/stations.md5" "$antiXradio_lib/stations.md5.old" > "$tmp_comp_NEW" # only process actucally updated files from the package, let untouched all unchanged files.
+   current_dir="$(pwd)"
+   cd "$XDG_CONFIG_HOME" # md5sum doesn't accept tilde expansion nor variables in pathnames in checksum files.
+   LANG=C md5sum -c "$tmp_comp_NEW" 2>/dev/null >"$tmp_comp_ALL"  # check all files waiting to be replaced whether they have been moified by user in his home.
+   sed -n 's/\(..*\): OK$/\1/p' "$tmp_comp_ALL" > "$tmp_comp_OK"
+   sed -n 's/\(..*\): FAILED$/\1/p' "$tmp_comp_ALL" > "$tmp_comp_FAIL"
+   while :; do sleep 1; [ -f $tmp_ready ] && break; done  # wait for stations list beeing read at startup before moving files.
+   while read i; do mv "$i" "$i.bak" 2>/dev/null; cp "/usr/local/lib${i:1}" "$i" 2>/dev/null; done < "$tmp_comp_OK" # move all originals to .bak extension and copy new file in place.
+   while read i; do cp "/usr/local/lib${i:1}" "$i.new"  2>/dev/null; done < "$tmp_comp_FAIL" # copy new file to .new extension in users home.
+   cd "$current_dir"
+}
+
+
+# Main part of the script starts here.
+# If program is already there, we give up after rising the windows of the running instance, otherwise we set a marker that it's running
+
+# try rising windows
+élever_fenêtres
+
+# Check for lockfile and exit if present
+check_lockfile
+
+# Set exit trap for proper cleanup on leaving
+echo_debug "Start processing:\n └─ Set trap for cleanup on exit"
+trap déblayage EXIT INT # this must be done after checking for already running instances of mpv. (We don't want to remove lockfile on leaving) EXIT is not sufficient, doesn't catch ctrl+c in antiX running on POSIX shell dash.
+
+# Check for stations list files. If not present in user's home folder try to copy from $antiXradio_lib/stations folder
+echo_debug "Checking for stations lists in $antiXradio_base/stations:"
+check_stationsfiles
+
+# call stations lists update check
+if ! grep "$(whoami)" $antiXradio_lib/s_update >/dev/null || [ ! -d "$antiXradio_base" ]; then
+   actualiser_stations_radios &
+fi
+
+# Set marker file that we are running
+echo_debug " └─ Write lockfile $tmp_rd_running"
+touch "$tmp_rd_running"
+
+# Check whether we have an internet connection
+echo_debug " └─ invoke internet connection test"
+vérifier_connexion
+
+# Detect locale and select appropriate stations list.
+déterminer_langue
+radios="$antiXradio_base"'/stations/radios_'"$ui_lang_4"'.txt'
+
+# If no radio list exists for the current locale then use radios_World.txt
+if [ ! -f "$radios" ]; then radios="$antiXradio_base/stations/radios_World.txt"; fi 
+echo_debug " └─ select stations list file:\n    $radios"
+
+# Initialise and fill some more variables
+radiosMem="$radios"
+
+radioEncours=$no_radio_text
+der=0
+yad_paned_key=$(($$ * $RANDOM))    # key mist not be static to avoid error "Maximum number of clients reached Error: Can't open display: (null) Failed creating new xdo instance"
+yad_paned_key=${yad_paned_key:0:5} # yad doesn't seem to allow more digits, using the full key generated causes yad to choke on startup
+flag_enregistrement=false          # flag state changes to "true" while recording is running
+flag_ecouter=false                 # flag state changes to "true" while radio is just playing per user request (not on autoplay)
+flag_demarrage=false               # flag state changes to "true" when autostart was invoked, reset after user interaction.
+
+# Create fifo buffer for yad recording notification icon
+[ -p "$fifo_warteschlange" ] || mkfifo "$fifo_warteschlange"  # create a fifo buffer for conversation with yad notification window
+
+# Read individual config file, overriding builtin defaults
+lire_conf
+
+# Main infinite loop (runs until user kills window or clicks que exit button):
+while :; do
+   n=h=0
+   radioNom=()
+
+   # Change the current radio list to another one
+   remplacer_liste
+
+   rm -f $tmp_ready 2>/dev/null
+   # Read radio list to arrays
+   lire_liste
+   touch $tmp_ready        # write flag file stations list was read at startup
+   
+   # Start autoplay if set in config. Prohibit if coming back from list change without changed list
+   $demarrage && ! $flag_nochange && autostart
+
+   # Calculate window size
+   calculer_dimension_fenêtres
+   echo_debug "Selecting station Nr. $der\nCalculated yad window height: $h px\nMaximal yad window height: $h_max\nSplitter set to: $h_splitter"
+
+   # Draw main window
+   while :; do
+      if ! $flag_enregistrement; then symbol_actual="$symbol_antiXradio"; else symbol_actual="$symbol_aufnahme"; fi  # change window icon when recording
+      if $flag_ecouter || $flag_enregistrement && ! $flag_demarrage && ! $flag_nochange; then  # wait for main window to come up and minimise it if play or recording was initiated by user (not automatically); Dirty workaround for yad not providing an option to start minimised
+         antiXradio_wid=""
+         while true; do
+            antiXradio_wid=$(xdotool search --name $"antiXradio"" – ")  # search for main window (shorter dash)
+            if [ "$antiXradio_wid" != "" ]; then
+               sleep .2
+               xdotool windowminimize $antiXradio_wid
+               break  
+            fi
+            sleep .2
+         done &
+      fi
+    
+      yad --plug=$yad_paned_key --tabnum=1 --height="$h" \
+      --print-column='2' --column="   " --column="" --column="$column_name" \
+      --list --no-selection --radiolist \
+      --hide-column='2' $(listeRadioYad) &> "$yad_paned_01" &
+
+      yad --plug=$yad_paned_key --tabnum=2 --height=20 --form --field=" "$"Displays a small window with information on the current radio programme and the station."":CHK" $icy_yad &> "$yad_paned_02" &
+
+      yad --paned --key=$yad_paned_key --height="$h" --splitter="$h_splitter" --tab="Tab 1" --tab="Tab 2" --window-icon="$symbol_actual" \
+      --title=$"antiXradio"" – $radioEncours" \
+      --center --height="$h" \
+      --button="$exit_button_text!antiXradio_poweroff!$infobulle_quitter":1 \
+      --button="$other_list_button_text!antiXradio_load_list!$infobulle_changer":2 \
+      --button="$stop_button_text!antiXradio_stop!$infobulle_pause":4 \
+      --button="$record_button_text!antiXradio_record!$infobulle_enregistrement":6 \
+      --button="$play_button_text!antiXradio_start!$infobulle_passer":0 \
+
+      yad_result="$?"
+
+      if [ $yad_result != 252 ]; then
+         choixType=$(<"$yad_paned_01")
+         icy_yad=$(<"$yad_paned_02")
+         icy_yad="${icy_yad%|*}"
+         flag_icy="${icy_yad,,}"
+         icy_yad="${icy_yad^^}"
+         if [ $yad_result != 2 ]; then 
+             flag_demarrage=false  # reset autostart flag
+             flag_nochange=false   # reset flag
+          fi
+      fi
+
+      echo_debug '  $choixType: '"$choixType"\\n'  $icy_yad: '"$icy_yad"\\n'  $flag_icy: '"$flag_icy"\\n'  $flag_demarrage: '"$flag_demarrage"\\n'  $flag_nochange: '"$flag_nochange"
+    
+      # Process user selection:
+      case "$yad_result" in
+         0)  echo_debug "Button received: Play\n └─ Changed station number to $der"; boutonCoch[$der]="FALSE"; choixType=${choixType%|*};\
+             boutonCoch[$choixType]="TRUE"; der=$choixType; maradio $choixType; radioEncours_static="$radioEncours"; écrire_conf;;
+         1)  echo_debug "Button received: Quit player\n └─ calling tuer_mpv\n └─ Removing lockfile $tmp_rd_running"; tuer_mpv; rm "$tmp_rd_running"; exit 0;;
+         2)  echo_debug "Button received: Select another stsations list"; radios=''; break;;
+         4)  echo_debug "Button received: Pause\n └─ calling tuer_mpv"; tuer_mpv ; radioEncours="${radioEncours_static} - ${stopped}";;
+         6)  echo_debug "Button received: Record\n └─ Changed station number to $der"; boutonCoch[$der]="FALSE";\
+             choixType=${choixType%|*}; boutonCoch[$choixType]="TRUE"; der=$choixType; enregistrement $choixType; écrire_conf;\
+             radioEncours_static="$radioEncours";radioEncours="$radioEncours – "$"!! Recording !!";;
+       252)  echo_debug "ESC key or X received: Calling info_exit"; info_exit;;
+      esac
+   done
+
+# Close main infinite loop:
+done
+
+
+#    antiXradio script provides a GUI for mpv designed to receive and
+#    listen to or record a radio reception from many public internet radio stations
+#    without having to use the console to enter the commands directly to mpv.
+#    Copyright (C) 2023  antiX Community
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <https://www.gnu.org/licenses/>.

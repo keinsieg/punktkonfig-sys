@@ -1,0 +1,150 @@
+#!/bin/bash
+# Script to localize antiX Linux File Manager (zzzFM's) "add-ons":
+# Common Bookmarks, Home Bookmark, Recent Files and Trash related entries
+# written by PPC, 7/2/2023
+# GPL
+# 
+# 7/2/2024 update by Robin.antiX: cleanup code, restructured, moved localisation
+#          into a function, added some new translatable entries for context menus.
+
+source gettext.sh  # needed for new gettext localisation style.
+
+function localise {
+# Expects the following global variables to be set before calling:
+   # $TEXTDOMAIN      # the translation resource to look up the translations in
+   # $label           # the label to search for
+   # $entry           # the translatable string
+# Additionally the following global variables are expected to be either empty or point to a specific non-default resource.
+   # $TEXTSDOMAINDIR   # the textdomaindir. If not set, /usr/share/locale is used.
+   # $target           # the target file. If not set, $targetfile is used, should point to  ~/.config/zzzfm/session
+   if [ -z "$TEXTDOMAINDIR" ]; then TEXTDOMAINDIR='/usr/share/locale'; fi  # set default
+   export TEXTDOMAINDIR TEXTDOMAIN  # needed for new gettext localisation style.
+   if [ -z "$target" ]; then target="$targetfile"; fi  # set default
+   entry="$(eval_gettext "$entry")"   # translate entry
+   if [ "$1" == 'remove_underscore' ]; then  entry="${entry//_/}"; fi  #remove any underscores if requested
+   sed -i 's/^'"${label}"'=.*/'"${label}"'='"${entry}"'/'  $target   # update target file
+   TEXTDOMAINDIR=""; target=""  # clear variables for next run
+}
+
+#make sure that zzzfm is not running (yes, this makes desktop icons disapear, if using a zzz desktop
+#pkill zzzfm && sleep 0.1
+
+#Generic variable(s)
+targetfile="$HOME/.config/zzzfm/session"
+
+#Localize Downloads Bookmark and path
+label=$(echo $XDG_DOWNLOAD_DIR| cut -d/ -f4)
+sed -i "s/cstm_6c99bdd2-label=.*/cstm_6c99bdd2-label=$label/g"  $targetfile
+sed -i "s|cstm_6c99bdd2-z=.*|cstm_6c99bdd2-z=$HOME/$label|g"  $targetfile
+
+#Localize Documents Bookmark and path
+label=$(echo $XDG_DOCUMENTS_DIR| cut -d/ -f4)
+sed -i "s/cstm_1f966a72-label=.*/cstm_1f966a72-label=$label/g"  $targetfile
+sed -i "s|cstm_1f966a72-z=.*|cstm_1f966a72-z=$HOME/$label|g"  $targetfile
+
+#Localize Pictures Bookmark and path
+label=$(echo $XDG_PICTURES_DIR| cut -d/ -f4)
+sed -i "s/cstm_23f8698b-label=.*/cstm_23f8698b-label=$label/g"  $targetfile
+sed -i "s|cstm_23f8698b-z=.*|cstm_23f8698b-z=$HOME/$label|g"  $targetfile
+
+#Localize Videos Bookmark and path
+label=$(echo $XDG_VIDEOS_DIR| cut -d/ -f4)
+sed -i "s/cstm_3be1d265-label=.*/cstm_3be1d265-label=$label/g"  $targetfile
+sed -i "s|cstm_3be1d265-z=.*|cstm_3be1d265-z=$HOME/$label|g"  $targetfile
+
+#Localize Music Bookmark and path
+label=$(echo $XDG_MUSIC_DIR| cut -d/ -f4)
+sed -i "s/cstm_1bd6d9d6-label=.*/cstm_1bd6d9d6-label=$label/g"  $targetfile
+sed -i "s|cstm_1bd6d9d6-z=.*|cstm_1bd6d9d6-z=$HOME/$label|g"  $targetfile
+
+
+# Clear variables, these will be set by localise function to default values automatically if not fed explicitly.
+TEXTDOMAINDIR=''
+target=''
+
+## Example localisation: ##
+# [target='./non default target file']  # only if not the default $targetfile should be used for this entry
+# [TEXTDOMAINDIR='/special/textdomain/dir']  # only if not the default textdomaindir should be used for this entry
+# TEXTDOMAIN='example'  # mandatory; you may use all textdomains available on the system for lookup of strings.
+# entry='translatable string'   # mandatory; Usually the string behind the equal sign.
+# lable='unique label in zzzFM session file to look up'  # mandatory; Usually the ID before the equal sign.
+# localise   # call function after all the variables are set.
+
+# Localise "Search for Doublettes" context menu entry
+TEXTDOMAIN=antix-zzz-extensions
+entry='Search for Doublettes'
+label='cstm_2c46ceda-label'
+localise
+
+# Localise "Compare with Meld" context menu entry
+TEXTDOMAIN=antix-zzz-extensions
+entry='Compare with Meld'
+label='cstm_3b9ab91f-label'
+localise
+
+# Localise "Restore from Trash" contextual menu entry
+TEXTDOMAIN=zzzfm
+entry='Restore'
+label='cstm_2b015761-label'
+localise
+
+# Localize "Home" bookmark:
+TEXTDOMAIN=zzzfm
+entry='Home'
+label='cstm_2b7f3cb1-label'
+localise
+
+#Localize "Details"/"Compact" view toolbar buttons:
+TEXTDOMAIN=zzzfm
+entry='_Detailed'
+label='cstm_248656b5-label'
+localise
+
+TEXTDOMAIN=zzzfm
+entry='_Compact'
+label='cstm_6c5d99cd-label'
+localise
+
+# Localize "New Command" toolbar menu entry (that has a localized entry,
+# but always keeps the original menu entry, that's only replaced by the 
+# localized version if that entry is deleted by the user
+TEXTDOMAIN=zzzfm
+entry='New _Command'
+label='cstm_6bf2815e-label'
+localise
+
+# localized Recent Files bookmark:
+# use geany's localization string, for now (our own localization can be
+# added later, when creating the localization fils for the "addons" o zzzfm...
+TEXTDOMAIN=geany
+entry='Recent _Files'
+label='cstm_0f7a0cea-label'
+localise remove_underscore
+
+#Localize "File Search" toolbar icon
+TEXTDOMAIN=zzzfm
+entry='_File Search'
+label='cstm_12757b81-label'
+localise remove_underscore
+
+# Localise "Trash" bookmark
+TEXTDOMAIN=antix-zzz-extensions
+entry='Trash'
+label='cstm_3ca29516-label'
+localise
+
+# Localise "Send to Trash" context menu entry
+TEXTDOMAIN=antix-zzz-extensions
+entry='Send to Trash'
+label='cstm_25a291d5-label'
+localise
+
+# Localise "Use as Wallpaper" context menu entry
+TEXTDOMAIN=antix-zzz-extensions
+entry='Use as Wallpaper'
+label='cstm_6eabb9d5-label'
+localise
+
+
+#Save flag, letting the system know that zzzfm is already localized
+echo "localized" > ~/.config/zzzfm/zzzfm_already_localized

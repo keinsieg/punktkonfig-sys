@@ -1,0 +1,3 @@
+#!/bin/bash
+
+comm <(awk '{print $1}' /usr/share/antiX/installed-packages.txt | sort -u) <(apt-mark showmanual | sort -u) -13 > my_installed_debs.txt && leafpad my_installed_debs.txt & 

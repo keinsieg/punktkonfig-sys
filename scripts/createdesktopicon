@@ -1,0 +1,47 @@
+#!/bin/bash
+#echo createdesktopicon ... starting for spacefm or zzzfm >> ~/createdesktopicon.log
+# creates icon on desktop named device-label or device
+
+# BobC 08/04/22 
+
+#echo usage from fm: createdesktopicon %m %v %l
+#echo parm1 - %m - device mount point
+#echo parm2 - %v - device (eg: /dev/sdc1)
+#echo parm3 - %l - device label
+
+# parm2 is required
+if [ -z "$2" ]
+then
+   { 
+	   echo "createdesktopicon parm2 - device is required"
+#	   echo "createdesktopicon parm2 - device is required" >> ~/createdesktopicon.log
+	   exit 1
+   }
+fi
+
+#echo try to create, strip out paths
+basnam=$(basename "$2")
+#echo basnam: $basnam >> ~/createdesktopicon.log
+
+# if parm3 label given, append to device as filename
+if [ ! -z "$3" ]
+then
+   { 
+	   basnam="$basnam-$3"
+       #echo basnam: $basnam >> ~/createdesktopicon.log
+   }
+fi
+
+#printenv
+#printenv >> ~/createdesktopicon.log
+
+#ls -l ~/Desktop
+#ls -l ~/Desktop >> ~/createdesktopicon.log
+
+
+# if Desktop link doesn't exist create it
+[ -e "$HOME/Desktop/$basnam" ] && exit 1
+echo createdesktopicon ... "$HOME/Desktop/$basnam"  not fnd, create link: ln -s "$1" "$HOME/Desktop/$basnam"
+#echo createdesktopicon ... "$HOME/Desktop/$basnam"  not fnd, create link: ln -s "$1" "$HOME/Desktop/$basnam" >> ~/createdesktopicon.log
+ln -s "$1" "$HOME/Desktop/$basnam"
+

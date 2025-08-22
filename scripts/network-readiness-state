@@ -1,0 +1,499 @@
+#!/bin/bash
+
+
+# ***** Global settings ************************************************
+
+# Capture the name of the script including file extension
+PROGNAME=${0##*/}
+
+# Capture the name of the script excluding file extension
+PROGNAME_SHORT=${PROGNAME%.*}
+
+# Set the version number
+PROGVERSION=1.0
+
+
+# ***** Fallback values for empty user defined settings ***************** 
+
+# Set the default maximum number of times the network check will be made
+ITERATION_COUNTER=60
+
+# Set the default time in seconds between each iteration cycle
+ITERATION_DELAY=0.50
+
+# Set the default to perform the 1st network with no on-screen feedback
+SILENT_SINGLE_CHECK=true
+
+# Set the default period the feedback window remains open after a successful check 
+FEEDBACK_WINDOW_PERIOD=3
+
+
+# ***** Remove anything that might be left over upon exit **************
+
+# Define the function to run and signal trigger
+trap clean-up EXIT
+
+
+# ***** Functions ******************************************************
+
+main()
+{
+   : 'Run the main trunk of the script'
+   :
+   : Parameters
+   : ' none'
+   :
+   : Result
+   : ' Searches for an operational local network. When detected, the'
+   : ' script exits without further action. Search progress is reported on screen'
+   :
+   : Example
+   : ' function-name'
+   :
+   : Note
+   : ' none'
+   :
+   : Requires
+   : ' bash sleep wmctrl'
+   
+   # -------------------------------------------------------------------
+   # Perform a silent single check for a connected network to potentially
+   # avoid running a loop of checks. Exit upon successful check.
+   # -------------------------------------------------------------------
+   
+   # Query the network for a connected interface, its IP address & a reachable gateway
+   INTERFACE_NAME=
+   INTERFACE_IP_ADDRESS=
+   GATEWAY_IP_ADDRESS=
+   check-network-readiness
+   
+    # When a silent check is to be performed & a ready interface is detected
+   if [[ $SILENT_SINGLE_CHECK = true ]] && [[ $INTERFACE_NAME != "" ]]; then
+   
+      # Exit the script taking no further action
+      exit 0
+   fi
+
+   
+   
+   # -------------------------------------------------------------------
+   # Perform a loop of checks for a connected network. Report progress 
+   # on screen. Exit upon successful check.
+   # -------------------------------------------------------------------
+   
+   # When in a GUI environment
+   if [[ $DISPLAY != "" ]]; then
+   
+      # Implement a way to send and update status messages to YAD and
+      # open a YAD window to which report messages will be sent
+      
+      # Open a communication pipe
+      construct-bi-directional-pipe "1"
+      
+      # Set up an id for the pipe to use when reading from or writing to it
+      # Suggestion: include arg1 used by the construction function
+      # The file descriptor var is allocated by the construction function
+      PIPE_1=$PIPE_FILE_DESCRIPTOR 
+      
+      # Apply YAD general settings
+      configure_yad
+      
+      # Open a YAD report window
+      construct-feedback-window "--window-height=300"             \
+                                "--window-width=650"              \
+                                "--text-titlebar=$WINDOW_TITLE"   \
+                                "--text-banner=Searching"         \
+                                "--pipe=$PIPE_1"
+      
+      # When in a console environment
+      else
+      
+      # Do nothing because messages will be shown on screen automatically
+      :
+   fi   
+   
+   
+   # Reiterate a check for a connected network. Issue a feedback message
+   # for each cycle. Exit immediately upon success.
+   
+   # When the iteration counter value is greater than zero
+   until [[ $ITERATION_COUNTER -eq 0 ]]
+   do 
+      # Query the network for a connected interface, its IP address & a reachable gateway
+      INTERFACE_NAME=
+      INTERFACE_IP_ADDRESS=
+      GATEWAY_IP_ADDRESS=
+      check-network-readiness
+      
+      # When a ready interface is detected
+      if [[ $INTERFACE_NAME != "" ]]; then
+         
+         # Message to display
+         MESSAGE_SUCCESS="$INTERFACE_NAME: $INTERFACE_IP_ADDRESS   Gateway: $GATEWAY_IP_ADDRESS"
+         
+         # Detect the environment type
+         case $DISPLAY in
+            "")   # Console environment
+                  
+                  # Issue the feedback message
+                  printf "%s\n" "$ITERATION_COUNTER: $MESSAGE_SUCCESS"
+                  ;;
+            *)    # GUI environment
+                  
+                  # Issue the feedback message
+                  printf "%s\n" "$ITERATION_COUNTER: $MESSAGE_SUCCESS" >&"$PIPE_1"
+                  
+                  # Pause to allow the message to be read
+                  sleep "$FEEDBACK_WINDOW_PERIOD"
+                  
+                  # Close the feedback window
+                  wmctrl -c "$WINDOW_TITLE"
+                  ;;
+         esac
+         
+         # Exit the script taking no further action
+         exit 0
+         
+         # When a ready interface is not detected
+         else
+         
+         # Message to display
+         MESSAGE_FAILURE="Network interface not ready"
+         
+         # Detect the environment
+         case $DISPLAY in
+            "")   # Console environment
+                  
+                  # Issue the feedback message
+                  printf "%s\n" "$ITERATION_COUNTER: $MESSAGE_FAILURE"
+                  ;;
+            *)    # GUI environment
+                  
+                  # Issue the feedback message
+                  printf "%s\n" "$ITERATION_COUNTER: $MESSAGE_FAILURE" >&"$PIPE_1"
+                  ;;
+         esac
+      fi
+
+      # Allow a period during which a failure state might be rectified
+      sleep $ITERATION_DELAY
+      
+      # Decrement the number of times the check will be made
+      ITERATION_COUNTER=$(($ITERATION_COUNTER-1))
+   done
+   
+
+   # When all iterations have completed i.e. a ready interface was not detected
+   if [[ $ITERATION_COUNTER -eq 0 ]]; then
+      
+      # Exit the script with a failure code
+      exit 1
+   fi
+}
+
+
+
+check-network-readiness()
+{
+   : 'Detect a connected interface, its IP address & a reachable gateway'
+   :
+   : Parameters
+   : ' none'
+   :
+   : Result
+   : ' Establishes whether the local network is operational'
+   :
+   : Example
+   : ' function-name'
+   :
+   : Note
+   : ' none'
+   :
+   : Requires
+   : ' awk bash ip'
+
+   # Query the network for requied info, suppress error messages, assign info to variables
+   eval "$(ip route 2> /dev/null \
+           | awk 'FNR==1 { print "INTERFACE_NAME="$5, "GATEWAY_IP_ADDRESS="$3 } \
+                  FNR==2 { print "INTERFACE_IP_ADDRESS="$NF }')"
+}
+
+
+
+construct-bi-directional-pipe()
+{
+   : 'Assemble all components of a pipe'
+   :
+   : Parameters
+   : ' arg1   Any integer. It is included in the pipe file name'
+   :
+   : Result
+   : ' Produces a pipe capable of read and write via $PIPE_FILE_DESCRIPTOR'
+   :
+   : Example
+   : ' construct-bi-directional-pipe "1"'
+   :
+   : Note
+   : ' arg1 is specified by the command calling this function'
+   :
+   : Requires
+   : ' bash mkfifo'
+
+   # Set up a name for the pipe
+   PIPE_FILE_NAME=pipe_${1}_filename.tmp
+   
+   # Create a named pipe
+   mkfifo $PIPE_FILE_NAME
+            
+   # Allow bash to allocate an unused file descriptor to the pipe and
+   # make the pipe capable of read and write via it 
+   exec {PIPE_FILE_DESCRIPTOR}<> $PIPE_FILE_NAME
+}
+
+
+
+construct-feedback-window()
+{
+   : 'Assemble all the components of a feedback window'
+   :
+   : Parameters
+   : ' arg1   --window-height=   height in pixels of the feedback window'
+   : ' arg2   --window-width=    width in pixels of the feedback window'
+   : ' arg3   --text-titlebar=   text (or var holding it) shown in the titlebar of the feedback window'
+   : ' arg4   --text-banner=     text shown in the head of the feedback window'
+   : ' arg5   --pipe=            file descriptor (or var holding it) of the pipe'
+   :
+   : Result
+   : ' Opens a window to which feedback messages are sent'
+   :
+   : Example
+   : ' construct-feedback-window "--window-height=300"           \'
+   : '                           "--window-width=300"            \'
+   : '                           "--text-titlebar=$WINDOW_TITLE" \'
+   : '                           "--text-banner=Searching"       \'
+   : '                           "--pipe=$PIPE_1"'
+   :
+   : Note
+   : ' arg1, 2, 3, 4, 5 are set by the command calling this function'
+   :
+   : Requires
+   : ' bash yad'
+
+   # Loop continuously
+   while true
+   do
+      # Assign the matching argument to a variable
+      case $1 in
+         --window-height=?*)    # Delete everything up to "=" and assign the remainder
+                                WINDOW_HEIGHT=${1#*=}
+                                ;;
+         --window-width=?*)     # Delete everything up to "=" and assign the remainder
+                                WINDOW_WIDTH=${1#*=}
+                                ;;
+         --text-titlebar=?*)    # Delete everything up to "=" and assign the remainder
+                                TEXT_TITLEBAR=${1#*=}
+                                ;;
+         --text-banner=?*)      # Delete everything up to "=" and assign the remainder
+                                TEXT_BANNER="\n<b><big> ${1#*=}...</big></b> \n\n"
+                                ;;
+         --pipe=?*)             # Delete everything up to "=" and assign the remainder
+                                PIPE=${1#*=}
+                                ;;
+         *)                     # No more arguments, so break out of the loop
+                                break
+      esac
+      
+      # Move to the next argument
+      shift
+   done
+   
+   # Open a feedback window
+   yad --center                             \
+       --height="$WINDOW_HEIGHT"            \
+       --width="$WINDOW_WIDTH"              \
+       --title="$TEXT_TITLEBAR"             \
+       --borders="$BORDER_SIZE"             \
+       --image-on-top                       \
+       --image="$INFO"                      \
+       --window-icon="$INFO"                \
+       --text-align="$TEXT_ALIGNMENT"       \
+       --text="$TEXT_BANNER"                \
+       --buttons-layout="$BUTTONS_POSITION" \
+       --button="$CLOSE"                    \
+       --text-info                          \
+       --tail                               \
+       --listen <&"$PIPE"                   &
+}
+
+
+
+configure_yad() 
+{
+   : 'Apply YAD general settings'
+   :
+   : Parameters
+   : ' none'
+   :
+   : Result
+   : ' initiates common elements of YAD windows'
+   :
+   : Example
+   : ' function-name'
+   :
+   : Note
+   : ' none'
+   :
+   : Requires
+   : ' none'
+   
+   # Title in the titlebar of YAD windows
+   WINDOW_TITLE="Network Readiness State"
+   
+   # Size in pixels of the border between the window edge and the dialogue
+   BORDER_SIZE=5
+   
+   # Alignment of the dialogue text
+   TEXT_ALIGNMENT=left
+   
+   # Window icon
+   INFO=gtk-info
+   
+   # Task bar icon
+   INFO=gtk-info
+   
+   # Window buttons layout
+   BUTTONS_POSITION=center
+   
+   # Window buttons definition
+   CLOSE=gtk-close
+}
+
+
+
+clean-up() 
+{
+   : 'Remove anything that might be left over upon exit'
+   :
+   : Parameters
+   : ' EXIT'
+   :
+   : Result
+   : ' Temporary files removed'
+   :
+   : Example
+   : ' trap clean_up EXIT'
+   :
+   : Note
+   : ' Add to the list anything that might be left over when exiting'
+   :
+   : Requires
+   : ' rm'
+
+   # Remove temporary files
+   rm -rf "$PIPE_FILE_NAME"
+}
+
+
+
+usage()
+{
+   : 'Show a description of the script usage when started from CLI'
+   :
+   : Parameters
+   : ' --searches= '
+   : ' --delay= '
+   : ' --report'
+   : ' --wait= '
+   : ' --help'
+   :
+   : Result
+   : ' Displays help and info'
+   :
+   : Example
+   : ' scriptname.sh --help'
+   :
+   : Note
+   : ' none'
+   :
+   : Requires
+   : ' cat'
+
+   # Display the following block
+cat << end-of-messageblock
+
+$PROGNAME version $PROGVERSION
+Search for a connected network.
+
+Usage: 
+   $PROGNAME [Options]
+
+Options:
+   --searches=   Maximum number of failed searches to conduct
+   --delay=      Period in seconds between each search
+   --report      Force showing of the feedback report
+                 This bypasses the no feedback on first search
+   --wait=       Period in seconds before automatically closing report
+                 window following a successful search 
+   --help        Show this output
+
+Summary:
+   Search for an operational network interface and a reachable gateway.
+   The script decides whether to run once or multiple times.
+
+   When a connected network interface is detected on the first search
+   the script immediately exits with no on-screen feedback.
+   
+   When the first search is unsuccessful, it is repeated every 0.5
+   seconds for a maximum of 60 searches. If a connected network is
+   detected during that period, the script immediately exits.  While the
+   search continues, on-screen feedback is provided for each cycle.
+   
+   Exit code 0 is returned upon detecting a connected interface.
+   Exit code 1 is returned upon not detecting a connected interface.
+               
+Configuration:
+   None
+  
+Environment:
+   Works in both console and GUI (X) environments. 
+  
+Requires:
+   awk bash cat ip mkfifo rm sleep wmctrl yad
+
+end-of-messageblock
+   exit
+}
+
+
+# ***** Start the script ***********************************************
+
+# Loop continuously
+while true
+do
+   # Assign user specified command arguments to variables
+   case $1 in
+      --searches=?*)      # Delete everything up to "=" and assign the remainder
+                          ITERATION_COUNTER=${1#*=}
+                          ;;
+      --delay=?*)         # Delete everything up to "=" and assign the remainder
+                          ITERATION_DELAY=${1#*=}
+                          ;;
+      --report)           # Assign a var to allow bypass of the silent check
+                          SILENT_SINGLE_CHECK=false
+                          ;;
+      --wait=?*)          # Delete everything up to "=" and assign the remainder
+                          FEEDBACK_WINDOW_PERIOD=${1#*=}
+                          ;;
+      --help)             # Show info and help
+                          usage
+                          ;;
+      *)                  # No more arguments, so break out of the loop
+                          break
+   esac
+   
+   # Move to the next argument
+   shift
+done
+
+# Start the main trunk of the script
+main

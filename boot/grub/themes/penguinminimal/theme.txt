@@ -1,0 +1,58 @@
+# ─────────────────────────────────────────────────────────────
+# GRUB2 Custom Theme - PenguinMinimal
+# 1366x768 | Solid Black | Clean Look | No Image / ASCII
+# ─────────────────────────────────────────────────────────────
+
+# ────────────────────────
+# ▶ General Appearance
+# ────────────────────────
+
+title-text: ""
+desktop-color: "#000000"
+
+# ────────────────────────
+# ▶ Terminal Styling
+# ────────────────────────
+
+terminal-font: "JetBrainsMono Regular 14"
+terminal-border: "0"
+terminal-width: "100%"
+terminal-height: "100%"
+
+# ────────────────────────
+# ▶ Boot Menu Configuration
+# ────────────────────────
+
++ boot_menu {
+  top = "38%"
+  left = "30%"
+  width = "40%"
+  height = "35%"
+
+  item_font = "JetBrainsMono Regular 14"
+  item_color = "#CCCCCC"
+  selected_item_color = "#FFFFFF"
+
+  item_height = "36"
+  item_padding = "4"
+  item_spacing = "8"
+
+  icon_width = "0"
+  icon_height = "0"
+  item_icon_space = "0"
+}
+
+# ────────────────────────
+# ▶ Boot Countdown
+# ────────────────────────
+
++ label {
+  top = "84%"
+  left = "25%"
+  width = "50%"
+  align = "center"
+  id = "__timeout__"
+  text = "Booting in %d seconds..."
+  font = "JetBrainsMono Regular 12"
+  color = "#777777"
+}

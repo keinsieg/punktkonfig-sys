@@ -1,0 +1,10 @@
+#!/bin/bash
+##Check for connectivity. If no network connection is detected, activate wi-fi networks, open connman and go straight to the wi-fi connections tab...
+sleep 3
+connected_addr=$(ip addr | grep "inet " | sed '/ scope host /d')
+if [ -z "$connected_addr" ]; then
+   pkill cmst
+   connmanctl enable wifi && cmst -d & sleep 2 && xdotool key Alt+w
+   else
+   echo 'Network connection detected, no need to configure anything'
+fi

@@ -1,0 +1,242 @@
+#!/bin/bash
+
+##------------------------------------------------------------------##
+## Configure slim/slimski, or switch to a different display manager ##
+##           Program ONLY works in DEBIAN based systems.            ##
+##                Specially built for antiX Linux                   ##
+##------------------------------------------------------------------##
+
+TEXTDOMAINDIR=/usr/share/locale
+TEXTDOMAIN=login-config-antix
+
+VERSION=0.1
+
+# Check that xserver is running and user is root.
+[[ $DISPLAY ]] || { echo "There is no xserver running. Exiting..." ; exit 1 ; }
+$(test -x /usr/bin/yad) || { echo "YAD is NOT installed. Exiting..." ; exit 1 ; }
+[[ $(id -u) -eq 0 ]] || { yad --image="gtk-dialog-error" \
+--text $"\nYou need to be root\! \n\nCannot continue." ; exit 1 ; }
+
+TERMINALEXEC="x-terminal-emulator -e"
+CURRENT_DM=$(cat /etc/X11/default-display-manager)
+WALLPAPER_FOLDER=/usr/share/wallpaper
+
+load_dm_config(){
+    local DISPLAY_MANAGER="${1}"
+    AUTOLOGIN_BOOL=false
+    NUMLOCK_BOOL=false
+
+    # Setting variable names and possible values
+    case $DISPLAY_MANAGER in
+           slim) CONFIG_PATH="/etc/slim.conf"
+                 THEME_PATH="/usr/share/slim/themes"
+                 USER_VARIABLE="default_user"
+                 AUTOLOGIN_VARIABLE="auto_login"
+                 AUTOLOGIN_VALUES="yes no"
+                 THEME_VARIABLE="current_theme"
+                 NUMLOCK_VARIABLE="numlock"
+                 NUMLOCK_VALUES="on off"
+                 ;;
+        slimski) CONFIG_PATH="/etc/slimski.local.conf"
+                 THEME_PATH="/usr/share/slimski/themes"
+                 USER_VARIABLE="default_user"
+                 AUTOLOGIN_VARIABLE="autologin_enabled"
+                 AUTOLOGIN_VALUES="true false"
+                 THEME_VARIABLE="current_theme"
+                 NUMLOCK_VARIABLE="numlock_enabled"
+                 NUMLOCK_VALUES="true false"
+                 [ ! -f $CONFIG_PATH ] && cp /etc/slimski.conf "$CONFIG_PATH"
+                 ;;
+    esac
+    
+    # Getting the login manager current values
+    USER_CURRENT="$(grep "^$USER_VARIABLE" "$CONFIG_PATH" | awk '{print $2}')"
+    THEME_CURRENT="$(grep "^$THEME_VARIABLE" "$CONFIG_PATH" | awk '{print $2}')"
+    AUTOLOGIN_CURRENT="$(grep "^$AUTOLOGIN_VARIABLE" "$CONFIG_PATH" | awk '{print $2}')"
+    if [[ "$AUTOLOGIN_CURRENT" == "${AUTOLOGIN_VALUES%% *}" ]]; then
+        AUTOLOGIN_BOOL=true
+    fi
+    
+    NUMLOCK_CURRENT="$(grep "^$NUMLOCK_VARIABLE" "$CONFIG_PATH" | awk '{print $2}')"
+    if [[ "$NUMLOCK_CURRENT" == "${NUMLOCK_VALUES%% *}" ]]; then
+        NUMLOCK_BOOL=true
+    fi
+}
+
+save_dm_config(){
+    local NEW_OPTIONS="${1}"
+    local NEW_WALLPAPER="${2}"
+    local USER_SELECT AUTOLOGIN_BOOL_NEW NUMLOCK_BOOL_NEW THEME_SELECT
+    local THEME_SELECTED_PATH TEMP_SELECT
+    local BACKGROUND_CURRENT BACKGROUND_OLD BACKGROUND_EXT
+    USER_SELECT="$(echo "$NEW_OPTIONS" | cut -d"," -f1)"
+    AUTOLOGIN_BOOL_NEW="$(echo "$NEW_OPTIONS" | cut -d"," -f2)"
+    NUMLOCK_BOOL_NEW="$(echo "$NEW_OPTIONS" | cut -d"," -f3)"
+    THEME_SELECT="$(echo "$NEW_OPTIONS" | cut -d"," -f4)"
+    
+    THEME_SELECTED_PATH="${THEME_PATH}/$THEME_SELECT"
+    # FUNCTION: Check variable existance in config file (and fix it if not there)
+    check_variable(){
+        local CHECK_VARIABLE="${1}"
+        local CHECK_CONFIG_FILE="${2}"
+        # If line cannot be found
+        if [ $(grep -c "^$CHECK_VARIABLE " "$CHECK_CONFIG_FILE") -eq 0 ]; then
+            # Uncoment variable
+            if [ $(grep -c "^#$CHECK_VARIABLE " "$CHECK_CONFIG_FILE") -ne 0 ]; then
+                sed -i "s/^#$CHECK_VARIABLE /$CHECK_VARIABLE /" "$CHECK_CONFIG_FILE"
+            elif [ $(grep -c "^#$CHECK_VARIABLE$" "$CHECK_CONFIG_FILE") -ne 0 ]; then
+                sed -i "s/^#$CHECK_VARIABLE$/$CHECK_VARIABLE /" "$CHECK_CONFIG_FILE"
+            # create the new lie with the variable if not in the file
+            else
+                echo "$CHECK_VARIABLE " >> "$CHECK_CONFIG_FILE"
+            fi            
+        fi
+    }
+    
+    # Selected different default user
+    if [[ "$USER_SELECT" != "$USER_CURRENT" ]]; then
+        # check that the variable is there. If not make it happen
+        echo "Saving default user $USER_SELECT"
+        check_variable "$USER_VARIABLE" "$CONFIG_PATH"
+        sed -i "s/^$USER_VARIABLE .*/$USER_VARIABLE      $USER_SELECT/" "$CONFIG_PATH"
+    fi
+    # Selected different theme
+    if [[ "$THEME_SELECT" != "$THEME_CURRENT" ]]; then
+        # If theme folder doesn't have .theme file, DONT use
+        if [ -f "$THEME_SELECTED_PATH/${LOGIN_MANAGER}.theme" ]; then
+            echo "Saving selected theme $THEME_SELECT"
+            check_variable "$THEME_VARIABLE" "$CONFIG_PATH"
+            sed -i "s/^$THEME_VARIABLE .*/$THEME_VARIABLE     $THEME_SELECT/" "$CONFIG_PATH"
+        fi
+    fi
+    # Selected autologin option
+    if [[ "${AUTOLOGIN_BOOL_NEW,,}" != "$AUTOLOGIN_BOOL" ]]; then
+        TEMP_SELECT="$(echo "$AUTOLOGIN_VALUES" | cut -d" " -f1)"
+        if [[ "$AUTOLOGIN_BOOL_NEW" != "TRUE" ]]; then
+            TEMP_SELECT="$(echo "$AUTOLOGIN_VALUES" | cut -d" " -f2)"
+        fi
+        echo "Saving autologin option $TEMP_SELECT"
+        check_variable "$AUTOLOGIN_VARIABLE" "$CONFIG_PATH"
+        sed -i "s/^$AUTOLOGIN_VARIABLE .*/$AUTOLOGIN_VARIABLE $TEMP_SELECT/" "$CONFIG_PATH"
+    fi
+    # Selected numlock option
+    if [[ "${NUMLOCK_BOOL_NEW,,}" != "$NUMLOCK_BOOL" ]]; then
+        TEMP_SELECT="$(echo "$NUMLOCK_VALUES" | cut -d" " -f1)"
+        if [[ "$NUMLOCK_BOOL_NEW" != "TRUE" ]]; then
+            TEMP_SELECT="$(echo "$NUMLOCK_VALUES" | cut -d" " -f2)"
+        fi
+        echo "Saving numlock option $TEMP_SELECT"
+        check_variable "$NUMLOCK_VARIABLE" "$CONFIG_PATH"
+        sed -i "s/^$NUMLOCK_VARIABLE .*/$NUMLOCK_VARIABLE   $TEMP_SELECT/" "$CONFIG_PATH"
+    fi
+    
+    # Save new wallpaper for selected theme (if the theme is valid)
+    if [[ ! -z "$NEW_WALLPAPER" ]] && [ -f "$THEME_SELECTED_PATH/${LOGIN_MANAGER}.theme" ]; then
+        BACKGROUND_CURRENT="$(ls -1 "$THEME_SELECTED_PATH" | grep -m1 -i "^background\.")"
+        BACKGOUND_OLD="$(ls -1 "$THEME_SELECTED_PATH" | grep -m1 -i "^background-old\.")"
+        # Check if the wallpaper is already backed up, if not, back it up
+        [ -z "$BACKGOUND_OLD" ] && [ ! -z "$BACKGROUND_CURRENT" ] && cp "$THEME_SELECTED_PATH/$BACKGROUND_CURRENT" "$THEME_SELECTED_PATH/background-old.${BACKGROUND_CURRENT##*.}"
+        
+        [ ! -z "$BACKGROUND_CURRENT" ] && rm "${THEME_SELECTED_PATH}/${BACKGROUND_CURRENT}"
+        # Copy the new wallpaper
+        echo "Saving new background for theme $THEME_SELECT"
+        cp "$NEW_WALLPAPER" "${THEME_SELECTED_PATH}/background.${NEW_WALLPAPER##*.}"
+    fi
+}
+
+test_slimski_theme(){
+    local TEST_THEME="${1}"
+    
+    local SLIMSKI_CONF="/etc/slimski.local.conf"
+    # Backup slimski config
+    cp "$SLIMSKI_CONF" "${SLIMSKI_CONF}-backup"
+    # Replace default user
+    sed -i 's/^default_user .*/default_user /' "$SLIMSKI_CONF"
+    # Test slimski
+    slimski -p "$TEST_THEME" > /dev/null
+    
+    # Restore original config file
+    mv -f "${SLIMSKI_CONF}-backup" "$SLIMSKI_CONF"
+}
+export -f test_slimski_theme
+
+
+switch_display_manager(){
+    local DISPLAY_MANAGER="${1}"
+    eval "$TERMINALEXEC sudo dpkg-reconfigure $DISPLAY_MANAGER"
+}
+
+# Check if the login manager exists
+if [ ! -x "$CURRENT_DM" ]; then
+    # Let the user select a different login manager
+    switch_display_manager "${CURRENT_DM##*/}"
+    exit 1
+fi
+
+LOGIN_MANAGER="${CURRENT_DM##*/}"
+CURRENT_USER="$SUDO_USER"
+DM_MESSAGE=$"Login Manager"
+CHANGE_DM_TEXT=$"Change"
+CHANGE_DM_DESC=$"Change Login Manager"
+TEST_BUTTON_TEXT=$"Test Theme"
+TEST_BUTTON_DESC=$"Test the theme before using it"
+
+## Check if the current display manager is slim or slimski ##
+if [[ "$LOGIN_MANAGER" == "slim" ]] || [[ "$LOGIN_MANAGER" == "slimski" ]]; then
+    # Load all relevant Login Manager configuration variables
+    load_dm_config "$LOGIN_MANAGER"
+    # Generate list of all available themes, with the current one first
+    ALL_THEMES="$(ls /usr/share/${LOGIN_MANAGER}/themes | grep -vx "$THEME_CURRENT" | tr "\n" "," | sed 's/,$//')"
+    ALL_THEMES="${THEME_CURRENT},${ALL_THEMES}"
+    # Create list for setting the default user
+    if [[ "$CURRENT_USER" == "$USER_CURRENT" ]]; then
+        SELECT_USER="$CURRENT_USER,"
+    elif [ -z "$USER_CURRENT" ]; then
+        SELECT_USER=",$CURRENT_USER"
+        AUTOLOGIN_BOOL=false
+    else
+        SELECT_USER="$USER_CURRENT,$CURRENT_USER,"
+    fi
+    # Special test button ONLY for slimski
+    if [[ "$LOGIN_MANAGER" == "slimski" ]]; then
+        TEST_BUTTON=(--field="${TEST_BUTTON_TEXT},,${TEST_BUTTON_DESC}":FBTN 'bash -c "test_slimski_theme %4"')
+    fi
+    CUSTOM_YAD_DIALOG=(
+        --form
+	    --field=$"Default user":CB "$SELECT_USER"
+        --field=$"Auto-login":CHK "$AUTOLOGIN_BOOL"
+        --field=$"Enable numlock at login":CHK "$NUMLOCK_BOOL"
+        --field=$"Select Theme":CB "$ALL_THEMES"
+        "${TEST_BUTTON[@]}"
+        --field=$"Change background":FL
+        --button='gtk-apply':0
+        --add-preview
+        --file-filter="(*.jpg *.jpeg *.png)| *.jpg *.JPG *.jpeg *.JPEG *.png *.PNG"
+        )
+fi
+
+GENERAL_YAD_DIALOG=(
+    --text="$DM_MESSAGE \n<b>$LOGIN_MANAGER</b>\n" --window-icon=computer
+    --text-align=center --borders=10 --width=250 --title="$DM_MESSAGE"
+    --class=login-conf-antix --name=login-conf-antix --center
+    --separator=',' --item-separator=','
+    --button="$CHANGE_DM_TEXT,computer,$CHANGE_DM_DESC":2 
+    )
+
+# Move to wallpaper folder
+cd "$WALLPAPER_FOLDER"
+
+# Launch YAD dialog to ask for changes
+SELECTION="$(yad "${GENERAL_YAD_DIALOG[@]}" "${CUSTOM_YAD_DIALOG[@]}")"
+
+case $? in
+    2) switch_display_manager "$LOGIN_MANAGER";;
+    0) NEW_OPTIONS="$(echo "$SELECTION" | cut -d"," -f1-4)"
+       NEW_WALLPAPER="$(echo "$SELECTION" | rev | cut -d"," -f2 | rev)"
+       save_dm_config "$NEW_OPTIONS" "$NEW_WALLPAPER"
+        ;;
+    *) echo "no changes";;
+esac
+
+unset -f test_slimski_theme
+

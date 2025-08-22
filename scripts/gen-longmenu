@@ -1,0 +1,1 @@
+sudo desktop-menu --names --generic-names --comments --order="ngc" --pattern="<>" --write-out-global

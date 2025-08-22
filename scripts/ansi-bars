@@ -1,0 +1,9 @@
+#!/bin/bash
+
+
+for i in $(seq 0 15); do 
+    o=00$i
+    color=$(tput setaf $i; tput rev)
+    no_color=$(tput sgr0)
+    printf "%03d: $color%40s$no_color\n" $i ""
+done
